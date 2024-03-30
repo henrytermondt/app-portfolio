@@ -38,38 +38,11 @@
         <button onclick = 'clearColors();'>Clear Colors</button>
         <button onclick = 'clearAll();'>Clear All</button>
     </div>
-    <!--  -->
-    <!-- <script id='vorinoi-source' type='glsl'>
-precision highp float;
-
-uniform sampler2D points;
-uniform vec2 pointsDim;
-
-void main() {
-    float dist = 10000.0;
-    for (int i = 0; i <= *numPoints*; i ++) {
-        vec2 pos = texture2D(points, vec2(i, 0) / pointsDim).xy;
-        float len = length(gl_FragCoord.xy - pos);
-        if (len < dist) dist = len;
-    }
-
-    gl_FragColor = vec4(dist / 200.0, dist / 200.0, dist / 200.0, 1);
-}
-
-        </script> -->
-
-    <!-- <script src='https://cdn.jsdelivr.net/gh/staplecactus764/webgl-compute-shader@v1.0.3/main.js'></script> -->
+    
     <script>
 
 const canvas = document.getElementById('canvas'),
     ctx = canvas.getContext('2d');
-// const cgl = new ComputeShaderContext(),
-//     glCanvas = cgl.canvas,
-//     gl = cgl.context;
-// glCanvas.id = 'gl-canvas';
-// document.body.appendChild(glCanvas);
-
-
 
 const width = window.innerWidth,
     height = window.innerHeight;
@@ -112,7 +85,6 @@ class Node {
         ctx.stroke();
         ctx.closePath();
 
-        // console.log(this.col);
         if (this.col) {
             ctx.fillStyle = 'black';
             ctx.fillText(this.col, this.x, this.y);
@@ -372,41 +344,6 @@ const loop = () => {
     window.requestAnimationFrame(loop);
 };
 window.requestAnimationFrame(loop);
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// ComputeShader.useContext(cgl);
-
-// const numPoints = 50;
-// const pointsData = new Float32Array(numPoints * 4);
-// for (let i = 0; i < pointsData.length; i += 4) pointsData[i] = Math.random() * width, pointsData[i + 1] = Math.random() * height;
-
-// for (let i = 0; i < pointsData.length; i += 4) {
-//     ctx.fillStyle = 'red';
-//     // ctx.fillText(i / 4, pointsData[i],  pointsData[i + 1], 5, 5);
-// }
-
-// const points = new ComputeShaderInput('points', pointsData, numPoints, 1);
-
-// const cs = new ComputeShader(document.getElementById('vorinoi-source').textContent.replaceAll('*numPoints*', numPoints), width, height);
-// cs.addInput(points);
-
-// cs.use(true);
-// cs.initializeInputs();
-// cs.run();
-
 
     </script>
 </body>
