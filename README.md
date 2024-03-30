@@ -25,7 +25,7 @@ Simulates a fluid using the Navier-Stoke Equations. Click <a href='https://henry
 ![enter image description here](https://henrytermondt.github.io/app-portfolio/imgs/fluid.png)
 
 ## Reaction-Diffusion
-Simulates chemicals interacting using the Gray-Scott model of reaction-diffusion. Click <a href='https://henrytermondt.github.io/app-portfolio/fluid-simulation.html' target='_blank'>here</a> to view a series of reactions.
+Simulates chemicals interacting using the Gray-Scott model of reaction-diffusion. Click <a href='https://henrytermondt.github.io/app-portfolio/reaction-diffusion' target='_blank'>here</a> to view a series of reactions.
 
 ![Chemicals Reacting](https://henrytermondt.github.io/app-portfolio/imgs/reaction-diffusion.png)
 
