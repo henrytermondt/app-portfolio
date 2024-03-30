@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<!-- Hide controls -->
+<html>
+
+<head>
+    <style>
+        * {
+            margin: 0;
+            overflow: hidden;
+        }
+
+        body {
+            background-color: gray;
+        }
+
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            display: block;
+            margin: auto;
+
+            /* background-color: white; */
+        }
+
+        #gl-canvas {
+            transform: scale(1, -1);
+        }
+    </style>
+</head>
+
+<body>
+    <canvas id='canvas' oncontextmenu = 'return false;'></canvas>
+    <div style = 'position: absolute; left: 10px; top: 10px;'>
+        <button onclick = 'colorNodes();'>Color Nodes</button>
+        <button onclick = 'Connection.showCtrls = !Connection.showCtrls'>Toggle Control Nodes</button>
+        <button onclick = 'clearConnections();'>Clear Connections</button>
+        <button onclick = 'clearColors();'>Clear Colors</button>
+        <button onclick = 'clearAll();'>Clear All</button>
+    </div>
+    <!--  -->
+    <!-- <script id='vorinoi-source' type='glsl'>
+precision highp float;
+
+uniform sampler2D points;
+uniform vec2 pointsDim;
+
+void main() {
+    float dist = 10000.0;
+    for (int i = 0; i <= *numPoints*; i ++) {
+        vec2 pos = texture2D(points, vec2(i, 0) / pointsDim).xy;
+        float len = length(gl_FragCoord.xy - pos);
+        if (len < dist) dist = len;
+    }
+
+    gl_FragColor = vec4(dist / 200.0, dist / 200.0, dist / 200.0, 1);
+}
+
+        </script> -->
+
+    <!-- <script src='https://cdn.jsdelivr.net/gh/staplecactus764/webgl-compute-shader@v1.0.3/main.js'></script> -->
+    <script>
+
+const canvas = document.getElementById('canvas'),
+    ctx = canvas.getContext('2d');
+// const cgl = new ComputeShaderContext(),
+//     glCanvas = cgl.canvas,
+//     gl = cgl.context;
+// glCanvas.id = 'gl-canvas';
+// document.body.appendChild(glCanvas);
+
+
+
+const width = window.innerWidth,
+    height = window.innerHeight;
+
+canvas.width = width;
+canvas.height = height;
+
+ctx.textAlign = 'center';
+ctx.textBaseline = 'middle';
+
+const tau = Math.PI * 2;
+
+const nodes = [];
+class Node {
+    constructor(x, y, col = null) {
+        this.x = x;
+        this.y = y;
+        this.col = col;
+        this.index = nodes.length;
+
+        this.connectsTo = []; // For nodes
+        this.includedConnections = []; // For connections
+        this.coloredConnections = 0;
+        this.coloredConnectedNodes = [];
+    }
+    remove() {
+        for (const c of this.includedConnections) {
+            const index = connections.indexOf(c);
+            if (index > -1) connections.splice(index, 1);
+        }
+        nodes[this.index] = null;
+    }
+    display() {
+        ctx.fillStyle = this.col ? Node.cols[this.col - 1] : 'white';
+        ctx.strokeStyle = this.selected ? 'grey' : 'black';
+
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, 10, 0, tau);
+        ctx.fill();
+        ctx.stroke();
+        ctx.closePath();
+
+        // console.log(this.col);
+        if (this.col) {
+            ctx.fillStyle = 'black';
+            ctx.fillText(this.col, this.x, this.y);
+        }
+    }
+
+    static select() {
+        let chosen = null;
+        for (const n of nodes) {
+            if (!n) continue;
+
+            n.selected = false;
+            if (Math.sqrt((n.x - mx) * (n.x - mx) + (n.y - my) * (n.y - my)) < 10) {
+                n.selected = true;
+                chosen = n;
+            }
+        }
+        return chosen;
+    }
+    static connect(a, b) {
+        connections.push(new Connection(a, b));
+    }
+
+    static cols = ['rgb(255, 140, 140)', 'rgb(140, 255, 140)', 'rgb(140, 140, 255)', 'rgb(255, 255, 140)'];
+}
+
+const connections = [];
+class Connection {
+    constructor(n1, n2) {
+        this.n1 = n1;
+        this.n2 = n2;
+
+        this.n1.includedConnections.push(this);
+        this.n2.includedConnections.push(this);
+
+        this.n1.connectsTo.push(n2);
+        this.n2.connectsTo.push(n1);
+
+        const dx = n2.x - n1.x,
+            dy = n2.y - n1.y;
+        const mag = Math.sqrt(dx * dx + dy * dy);
+        const ndx = dx / mag,
+            ndy = dy / mag;
+        this.ctrl1 = {
+            x: n1.x + ndx * 50,
+            y: n1.y + ndy * 50,
+            selected: false,
+        };
+        this.ctrl2 = {
+            x: n2.x - ndx * 50,
+            y: n2.y - ndy * 50,
+            selected: false,
+        };
+    }
+    controls() {
+        if (this.ctrl1.selected) {
+            this.ctrl1.x = mx;
+            this.ctrl1.y = my;
+        }
+        if (this.ctrl2.selected) {
+            this.ctrl2.x = mx;
+            this.ctrl2.y = my;
+        }
+    }
+    display() {
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = 'black';
+        
+        ctx.beginPath();
+        ctx.moveTo(this.n1.x, this.n1.y);
+        ctx.bezierCurveTo(this.ctrl1.x, this.ctrl1.y, this.ctrl2.x, this.ctrl2.y, this.n2.x, this.n2.y);
+        ctx.stroke();
+        ctx.closePath();
+
+        if (Connection.showCtrls) this.displayCtrls();
+    }
+    displayCtrls() {
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = 'black';
+
+        ctx.beginPath();
+        ctx.moveTo(this.n1.x, this.n1.y);
+        ctx.lineTo(this.ctrl1.x, this.ctrl1.y);
+        ctx.stroke();
+        ctx.closePath();
+
+        ctx.beginPath();
+        ctx.moveTo(this.n2.x, this.n2.y);
+        ctx.lineTo(this.ctrl2.x, this.ctrl2.y);
+        ctx.stroke();
+        ctx.closePath();
+
+        ctx.fillStyle = 'white';
+        ctx.strokeStyle = this.selected ? 'grey' : 'black';
+
+        ctx.beginPath();
+        ctx.arc(this.ctrl1.x, this.ctrl1.y, 5, 0, tau);
+        ctx.fill();
+        ctx.stroke();
+        ctx.closePath();
+
+        ctx.beginPath();
+        ctx.arc(this.ctrl2.x, this.ctrl2.y, 5, 0, tau);
+        ctx.fill();
+        ctx.stroke();
+        ctx.closePath();
+    }
+
+    static selectControl() {
+        let chosen = null;
+        for (const c of connections) {
+            if (!c) continue;
+            
+            c.ctrl1.selected = false;
+            if (Math.sqrt((c.ctrl1.x - mx) * (c.ctrl1.x - mx) + (c.ctrl1.y - my) * (c.ctrl1.y - my)) < 5) {
+                c.ctrl1.selected = true;
+                chosen = c.ctrl1;
+            }
+
+            c.ctrl2.selected = false;
+            if (Math.sqrt((c.ctrl2.x - mx) * (c.ctrl2.x - mx) + (c.ctrl2.y - my) * (c.ctrl2.y - my)) < 5) {
+                c.ctrl2.selected = true;
+                chosen = c.ctrl2;
+            }
+        }
+        return chosen;
+    }
+    static showCtrls = true;
+}
+
+const coloredNodes = [],
+    uncoloredNodes = [];
+const colorNodes = () => {
+    for (let i = 5; i --;) {
+        for (const n of nodes) {
+            if (!n) continue;
+
+            if (n.col) {
+                coloredNodes.push(n);
+            } else {
+                uncoloredNodes.push(n);
+            }
+        }
+
+        const colorableNodes = [];
+        for (const n of coloredNodes) {
+            for (let i = n.connectsTo.length; i --;) {
+                n.connectsTo[i].coloredConnections ++;
+                n.connectsTo[i].coloredConnectedNodes.push(n);
+                if (n.connectsTo[i].coloredConnections >= 3) {
+                    colorableNodes.push(n.connectsTo[i]);
+                }
+            }
+        }
+        
+        for (const n of colorableNodes) {
+            const availableColors = [1, 2, 3, 4];
+            for (const cn of n.coloredConnectedNodes) {
+                const index = availableColors.indexOf(cn.col);
+                if (index > -1) availableColors.splice(index, 1);
+            }
+
+            n.col = availableColors[0];
+        }
+    }
+};
+
+const clearConnections = () => {
+    connections.length = 0;
+    
+    for (const n of nodes) {
+        if (n) n.connectsTo.length = 0;
+    }
+};
+const clearColors = () => {
+    for (const n of nodes) {
+        if (n) n.col = null;
+    }
+};
+const clearAll = () => nodes.length = connections.length = 0;
+
+let downSelected = null, upSelected = null, selectedNode = null, selectedCtrl = null;
+
+let mx = 0, my = 0, button = null, clicked = false;
+canvas.addEventListener('mousemove', e => {
+    mx = e.offsetX, my = e.offsetY;
+});
+canvas.addEventListener('mousedown', e => {
+    mx = e.offsetX, my = e.offsetY;
+    button = e.button;
+    clicked = true;
+    
+    downSelected = null;
+    if (button === 0) {
+        selectedNode = Node.select();
+        selectedCtrl = Connection.selectControl();
+
+        if (!selectedCtrl) {
+            if (!selectedNode) {
+                const newNode = new Node(e.offsetX, e.offsetY);
+                newNode.selected = true;
+                downSelected = selectedNode = newNode;
+                nodes.push(newNode);
+            } else downSelected = selectedNode;
+        }
+    } else if (button === 2) {
+        Node.select().remove();
+    }
+});
+canvas.addEventListener('mouseup', e => {
+    clicked = false;
+
+    const selected = Node.select();
+    upSelected = selected;
+
+    if (downSelected && upSelected && downSelected !== upSelected) {
+        Node.connect(downSelected, upSelected);
+    }
+
+    if (selectedCtrl) selectedCtrl.selected = false;
+});
+
+window.addEventListener('keydown', e => {
+    if (selectedNode) selectedNode.col = +e.key || null;
+});
+
+const loop = () => {
+    ctx.fillStyle = 'white';
+    ctx.fillRect(0, 0, width, height);
+
+    for (const c of connections) {
+        if (!c) continue;
+
+        ctx.lineWidth = 2;
+        c.controls();
+        ctx.lineWidth = 3;
+        c.display();
+    }
+    
+    if (clicked && downSelected) {
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = 'black';
+        ctx.beginPath();
+        ctx.moveTo(downSelected.x, downSelected.y);
+        ctx.lineTo(mx, my);
+        ctx.stroke();
+        ctx.closePath();
+    }
+
+    ctx.lineWidth = 3;
+    for (const n of nodes) {
+        if (!n) continue;
+
+        n.display();
+    }
+    
+    window.requestAnimationFrame(loop);
+};
+window.requestAnimationFrame(loop);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ComputeShader.useContext(cgl);
+
+// const numPoints = 50;
+// const pointsData = new Float32Array(numPoints * 4);
+// for (let i = 0; i < pointsData.length; i += 4) pointsData[i] = Math.random() * width, pointsData[i + 1] = Math.random() * height;
+
+// for (let i = 0; i < pointsData.length; i += 4) {
+//     ctx.fillStyle = 'red';
+//     // ctx.fillText(i / 4, pointsData[i],  pointsData[i + 1], 5, 5);
+// }
+
+// const points = new ComputeShaderInput('points', pointsData, numPoints, 1);
+
+// const cs = new ComputeShader(document.getElementById('vorinoi-source').textContent.replaceAll('*numPoints*', numPoints), width, height);
+// cs.addInput(points);
+
+// cs.use(true);
+// cs.initializeInputs();
+// cs.run();
+
+
+    </script>
+</body>
+
+</html>

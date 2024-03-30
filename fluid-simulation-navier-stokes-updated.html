@@ -1,0 +1,1135 @@
+<!DOCTYPE html>
+<!-- 
+
+Fluid Simulation
+
+Finished: 3/22/23
+
+Resources:
+http://graphics.cs.cmu.edu/nsp/course/15-464/Fall09/papers/StamFluidforGames.pdf
+
+Last edited Dec 15, 2023 - Reduced brightness of density added
+
+Jul 27, 2023
+ -->
+<html>
+    <head>
+        <style>
+            * {
+                margin: 0;
+                overflow: hidden;
+            }
+            body {
+                background-color: black;
+            }
+            canvas {
+                /* display: block;
+                margin: auto; */
+                /* image-rendering: crisp-edges; */
+                /* image-rendering: pixelated; */
+
+                width: 100%;
+                height: 100%;
+
+                /* background-color: white; */
+            }
+
+            #log .sep {
+                width: calc(100% - 10px);
+                height: 1px;
+
+                background-color: rgb(160, 160, 160);
+            }
+            #log .info {
+                width: 100%;
+                display: inline-block;
+                white-space: break-spaces;
+                overflow: scroll;
+            }
+
+            #log {
+                position: absolute;
+                top: 400px;
+
+                background-color: white;
+                padding: 4px 5px 5px 14px;
+
+                width: 500px;
+
+                overflow: scroll;
+
+                border-top: 2px solid rgb(160, 160, 160);
+
+                display: none;
+            }
+        </style>
+    </head>
+    <body>
+        <!-- <canvas id = 'canvas'></canvas> -->
+        <p id = 'log'></p>
+
+        <script id = 'render' type = 'glsl'>
+precision highp float;
+
+uniform sampler2D density;
+uniform vec2 densityDimensions;
+
+void main() {
+    vec3 col = texture2D(density, gl_FragCoord.xy / densityDimensions).rgb;
+    float scale = 1.0;
+    float r = col.r * scale,
+        g = col.g * scale,
+        b = col.b * scale;
+    gl_FragColor = vec4(r, g, b, 1);
+}
+        </script>
+        
+        <script id = 'add-vel' type = 'glsl'>
+precision highp float;
+
+uniform sampler2D vel;
+uniform vec2 velDimensions;
+
+uniform vec2 mouse;
+uniform vec2 pmouse;
+
+uniform float forceScale;
+
+void main() {
+
+    vec2 ap = gl_FragCoord.xy - 0.5;
+    vec4 velData = texture2D(vel, gl_FragCoord.xy / velDimensions);
+
+    float dist = ((mouse.x - ap.x) * (mouse.x - ap.x) + (mouse.y - ap.y) * (mouse.y - ap.y)) * forceScale + 0.1;
+     
+    gl_FragColor = vec4(velData.x + (mouse.x - pmouse.x) / dist * 0.1, velData.y + (mouse.y - pmouse.y) / dist * 0.1, 0, 0);
+}
+        </script>
+        <script id = 'add-density' type = 'glsl'>
+precision highp float;
+
+uniform sampler2D density;
+uniform vec2 densityDimensions;
+
+uniform vec2 mouse;
+uniform vec3 col;
+
+uniform float forceScale;
+
+void main() {
+    vec2 ap = gl_FragCoord.xy;
+    vec3 densityData = texture2D(density, ap / densityDimensions).rgb;
+
+    float dist = ((mouse.x - ap.x) * (mouse.x - ap.x) + (mouse.y - ap.y) * (mouse.y - ap.y)) * forceScale + 0.1;
+
+    gl_FragColor = vec4(densityData + col / dist * 0.6, 0);
+}
+
+
+        </script>
+        
+        <script id = 'diffuse-vel' type = 'glsl'>
+precision highp float;
+
+uniform sampler2D vel;
+uniform vec2 velDimensions;
+uniform sampler2D newVel;
+uniform vec2 newVelDimensions;
+
+uniform float diff;
+
+void main() {
+    vec2 ap = gl_FragCoord.xy;
+    float x = ap.x,
+        y = ap.y;
+    
+    vec4 c = texture2D(vel, vec2(x, y) / velDimensions),
+        cl = texture2D(newVel, vec2(x - 1.0, y) / newVelDimensions),
+        cr = texture2D(newVel, vec2(x + 1.0, y) / newVelDimensions),
+        cu = texture2D(newVel, vec2(x, y - 1.0) / newVelDimensions),
+        cd = texture2D(newVel, vec2(x, y + 1.0) / newVelDimensions);
+    
+    float newx = (c.x + diff * (cl.x + cr.x + cu.x + cd.x)) / (1.0 + 4.0 * diff),
+        newy = (c.y + diff * (cl.y + cr.y + cu.y + cd.y)) / (1.0 + 4.0 * diff);
+    
+    gl_FragColor = vec4(newx, newy, 0, 0);
+}
+
+        </script>
+        <script id = 'vorticity-confinement' type = 'glsl'>
+precision highp float;
+
+uniform sampler2D vel;
+uniform vec2 velDimensions;
+
+uniform float vStrength;
+
+float curl(float x, float y) {
+    vec4 cnx = texture2D(vel, vec2(x - 1.0, y) / velDimensions),
+        cny = texture2D(vel, vec2(x, y - 1.0) / velDimensions),
+        cpx = texture2D(vel, vec2(x + 1.0, y) / velDimensions),
+        cpy = texture2D(vel, vec2(x, y + 1.0) / velDimensions);
+    float r = cpy.x - cny.x + cnx.y - cpx.y;
+    return r;
+}
+
+void main() {
+
+    vec2 ap = gl_FragCoord.xy;
+    vec4 velData = texture2D(vel, ap / velDimensions);
+    
+    vec4 c = texture2D(vel, vec2(ap.x, ap.y) / velDimensions),
+        cnx = texture2D(vel, vec2(ap.x - 1.0, ap.y) / velDimensions),
+        cny = texture2D(vel, vec2(ap.x, ap.y - 1.0) / velDimensions),
+        cpx = texture2D(vel, vec2(ap.x + 1.0, ap.y) / velDimensions),
+        cpy = texture2D(vel, vec2(ap.x, ap.y + 1.0) / velDimensions);
+
+    float dx = abs(
+            curl(ap.x, ap.y - 1.0)
+        ) - abs(
+            curl(ap.x, ap.y + 1.0)
+        ),
+        dy = abs(
+            curl(ap.x + 1.0, ap.y)
+        ) - abs(
+            curl(ap.x - 1.0, ap.y)
+        );
+    float mag = sqrt(dx * dx + dy * dy) * 0.1;
+    float len = vStrength / (mag + 0.0001);
+    
+    if (mag > 0.01) {
+        if (mag > 1.0) {
+            gl_FragColor = vec4(c.x + dx * len * 5.0, c.y + dy * len * 5.0, 0, 0);
+        } else {
+            gl_FragColor = vec4(c.x + dx * len, c.y + dy * len, 0, 0);
+        }
+    } else gl_FragColor = c;
+    
+}
+
+
+        </script>
+        <script id = 'advect-vel' type = 'glsl'>
+precision highp float;
+
+uniform sampler2D vel;
+uniform vec2 velDimensions;
+
+void main() {
+    vec2 ap = gl_FragCoord.xy + 0.5;
+    vec4 velData = texture2D(vel, ap / velDimensions);
+
+    float px = ap.x - velData.x,
+        py = ap.y - velData.y;
+    
+    if (px < 1.0) px = 1.0;
+    if (py < 1.0) py = 1.0;
+    if (px > velDimensions.x - 2.0) px = velDimensions.x - 2.0;
+    if (py > velDimensions.y - 2.0) py = velDimensions.y - 2.0;
+
+    float cpx = floor(px),
+        cpy = floor(py);
+    float fractx = px - cpx,
+        fracty = py - cpy;
+    
+    vec4 c = texture2D(vel, vec2(cpx - 0.5, cpy - 0.5) / velDimensions),
+        cx = texture2D(vel, vec2(cpx + 0.5, cpy - 0.5) / velDimensions),
+        cy = texture2D(vel, vec2(cpx - 0.5, cpy + 0.5) / velDimensions),
+        cxy = texture2D(vel, vec2(cpx + 0.5, cpy + 0.5) / velDimensions);
+
+
+    float x = ((1.0 - fractx) * (
+            (1.0 - fracty) * c.x +
+            fracty         * cy.x) +
+        fractx * (
+            (1.0 - fracty) * cx.x +
+            fracty         * cxy.x)
+        ) * 0.98,
+        y = ((1.0 - fractx) * (
+            (1.0 - fracty) * c.y +
+            fracty         * cy.y) +
+        fractx * (
+            (1.0 - fracty) * cx.y +
+            fracty         * cxy.y)
+        ) * 0.98;
+    
+    gl_FragColor = vec4(x, y, 0, 0);
+}
+        </script>
+        <script id = 'project1' type = 'glsl'>
+precision highp float;
+
+uniform sampler2D vel;
+uniform vec2 velDimensions;
+uniform sampler2D p;
+uniform vec2 pDimensions;
+
+void main() {
+    vec2 ap = gl_FragCoord.xy;// + 0.5;
+    
+    if (ap.x != 0.5 && ap.x != velDimensions.x && ap.y != 0.5 && ap.y != velDimensions.y) {
+        vec4 c = texture2D(vel, vec2(ap.x, ap.y) / velDimensions),
+            cnx = texture2D(vel, vec2(ap.x - 1.0, ap.y) / velDimensions),
+            cny = texture2D(vel, vec2(ap.x, ap.y - 1.0) / velDimensions),
+            cpx = texture2D(vel, vec2(ap.x + 1.0, ap.y) / velDimensions),
+            cpy = texture2D(vel, vec2(ap.x, ap.y + 1.0) / velDimensions);
+
+        float pnx = texture2D(p, vec2(ap.x - 1.0, ap.y) / pDimensions).x,
+            pny = texture2D(p, vec2(ap.x, ap.y - 1.0) / pDimensions).x,
+            ppx = texture2D(p, vec2(ap.x + 1.0, ap.y) / pDimensions).x,
+            ppy = texture2D(p, vec2(ap.x, ap.y + 1.0) / pDimensions).x;
+        float divergence = 1.9 * -0.5 * (cpx.x - cnx.x + cpy.y - cny.y); // Includes overrelaxation
+        
+
+        float newp = (divergence + pnx + ppx + pny + ppy) * 0.25;//(divergence + pnx + ppx + pny + ppy) * 0.25;
+        
+        gl_FragColor = vec4((divergence + pnx + ppx + pny + ppy) * 0.25, 0, 0, 0);
+    } else {
+        gl_FragColor = vec4(0, 0, 0, 0);
+    }
+}
+        </script>
+        <script id = 'project2' type = 'glsl'>
+precision highp float;
+
+uniform sampler2D vel;
+uniform vec2 velDimensions;
+uniform sampler2D p;
+uniform vec2 pDimensions;
+
+void main() {
+    vec2 ap = gl_FragCoord.xy;
+    
+    vec4 c = texture2D(vel, vec2(ap.x, ap.y) / velDimensions);
+
+    float pnx = texture2D(p, vec2(ap.x - 1.0, ap.y) / pDimensions).x,
+        pny = texture2D(p, vec2(ap.x, ap.y - 1.0) / pDimensions).x,
+        ppx = texture2D(p, vec2(ap.x + 1.0, ap.y) / pDimensions).x,
+        ppy = texture2D(p, vec2(ap.x, ap.y + 1.0) / pDimensions).x;
+
+    //(divergence[index(x, y)] + p[index(x - 1, y)] + p[index(x + 1, y)] + p[index(x, y - 1)] + p[index(x, y + 1)]) * 0.25;
+
+    //float p = (divergence + pnx + ppx + pny + ppy) * 0.25;
+    
+    vec2 result = vec2(c.x - 0.5 * (ppx - pnx), c.y - 0.5 * (ppy - pny));
+
+    gl_FragColor = vec4(result, 0, 0);//vec4(floor(ppx * 1000.0) / 1000.0, floor(pnx * 1000.0) / 1000.0, floor(ppy * 1000.0) / 1000.0, floor(pny * 1000.0) / 1000.0);//
+}
+
+
+            //velx[index(x, y)] -= 0.5 * (p[index(x + 1, y)] - p[index(x - 1, y)]);
+            //vely[index(x, y)] -= 0.5 * (p[index(x, y + 1)] - p[index(x, y - 1)]);
+        </script>
+        <script id = 'set-boundaries' type = 'glsl'>
+precision highp float;
+
+uniform int dir;
+
+uniform sampler2D data;
+uniform vec2 dataDimensions;
+
+void main() {
+    vec2 ap = gl_FragCoord.xy;
+    
+    vec2 result = texture2D(data, vec2(ap.x, ap.y) / dataDimensions).xy;
+
+    if (dir == 1) {
+        if (ap.x <= 2.0) result.x = texture2D(data, vec2(ap.x + 1.0, ap.y) / dataDimensions).x;
+        if (ap.x >= dataDimensions.x - 3.0) result.x = texture2D(data, vec2(ap.x - 1.0, ap.y) / dataDimensions).x;
+        if (ap.y <= 2.0) result.x = texture2D(data, vec2(ap.x, ap.y + 1.0) / dataDimensions).x;
+        if (ap.y >= dataDimensions.y - 3.0) result.x = texture2D(data, vec2(ap.x, ap.y - 1.0) / dataDimensions).x;
+    } else {
+        if (ap.x <= 2.0) result.x = -texture2D(data, vec2(ap.x + 1.0, ap.y) / dataDimensions).x, result.y = -texture2D(data, vec2(ap.x + 1.0, ap.y) / dataDimensions).y;
+        if (ap.x >= dataDimensions.x - 3.0) result.x = -texture2D(data, vec2(ap.x - 1.0, ap.y) / dataDimensions).x, result.y = -texture2D(data, vec2(ap.x - 1.0, ap.y) / dataDimensions).y;
+        if (ap.y <= 2.0) result.y = -texture2D(data, vec2(ap.x, ap.y + 1.0) / dataDimensions).y, result.x = -texture2D(data, vec2(ap.x, ap.y + 1.0) / dataDimensions).x;
+        if (ap.y >= dataDimensions.y - 3.0) result.y = -texture2D(data, vec2(ap.x, ap.y - 1.0) / dataDimensions).y, result.x = -texture2D(data, vec2(ap.x, ap.y - 1.0) / dataDimensions).x;
+    }
+
+    //if (ap.x <= 10.0 || result.x >= velDimensions.x - 10.0) result.x = 0.0, result.y = 0.0;
+    //if (ap.y <= 10.0 || result.y >= velDimensions.y - 10.0) result.x = 0.0, result.y = 0.0;
+
+    gl_FragColor = vec4(result, 0, 0);//vec4(floor(ppx * 1000.0) / 1000.0, floor(pnx * 1000.0) / 1000.0, floor(ppy * 1000.0) / 1000.0, floor(pny * 1000.0) / 1000.0);//
+}
+        </script>
+        
+        <script id = 'diffuse-density' type = 'glsl'>
+precision highp float;
+
+uniform sampler2D density;
+uniform vec2 densityDimensions;
+uniform sampler2D newDensity;
+uniform vec2 newDensityDimensions;
+
+uniform float diff;
+
+void main() {
+    vec2 ap = gl_FragCoord.xy;// + 0.5;
+    float x = ap.x,
+        y = ap.y;
+    
+    vec4 c = texture2D(density, vec2(x, y) / densityDimensions),
+        cl = texture2D(newDensity, vec2(x - 1.0, y) / newDensityDimensions),
+        cr = texture2D(newDensity, vec2(x + 1.0, y) / newDensityDimensions),
+        cu = texture2D(newDensity, vec2(x, y - 1.0) / newDensityDimensions),
+        cd = texture2D(newDensity, vec2(x, y + 1.0) / newDensityDimensions);
+    
+    float r = (c.r + diff * (cl.r + cr.r + cu.r + cd.r)) / (1.0 + 4.0 * diff),
+        g = (c.g + diff * (cl.g + cr.g + cu.g + cd.g)) / (1.0 + 4.0 * diff),
+        b = (c.b + diff * (cl.b + cr.b + cu.b + cd.b)) / (1.0 + 4.0 * diff);
+    
+    gl_FragColor = vec4(r, g, b, 0);
+}
+
+        </script>
+        <script id = 'advect-density' type = 'glsl'>
+precision highp float;
+
+uniform sampler2D density;
+uniform vec2 densityDimensions;
+
+uniform sampler2D vel;
+uniform vec2 velDimensions;
+
+void main() {
+    vec2 ap = gl_FragCoord.xy + 0.5;
+    vec4 vel = texture2D(vel, ap / velDimensions);
+
+    float x = ap.x,
+        y = ap.y;
+    float px = x - vel.x,
+        py = y - vel.y;
+    
+    if (px < 1.0) px = 1.0;
+    if (py < 1.0) py = 1.0;
+    if (px > velDimensions.x - 2.0) px = velDimensions.x - 2.0;
+    if (py > velDimensions.y - 2.0) py = velDimensions.y - 2.0;
+
+    float cpx = floor(px), // Mult by the grid size?
+        cpy = floor(py);
+    float fractx = px - cpx,
+        fracty = py - cpy;
+    
+    vec4 c = texture2D(density, vec2(cpx - 0.5, cpy - 0.5) / densityDimensions);
+
+    vec4 cx = texture2D(density, vec2(cpx + 0.5, cpy - 0.5) / densityDimensions),
+        cy = texture2D(density, vec2(cpx - 0.5, cpy + 0.5) / densityDimensions),
+        cxy = texture2D(density, vec2(cpx + 0.5, cpy + 0.5) / densityDimensions);
+
+    float r = ((1.0 - fractx) * (
+            (1.0 - fracty) * c.r +
+            fracty         * cy.r) +
+        fractx * (
+            (1.0 - fracty) * cx.r +
+            fracty         * cxy.r
+        )) * 0.995,
+        g = ((1.0 - fractx) * (
+            (1.0 - fracty) * c.g +
+            fracty         * cy.g) +
+        fractx * (
+            (1.0 - fracty) * cx.g +
+            fracty         * cxy.g
+        )) * 0.995,
+        b = ((1.0 - fractx) * (
+            (1.0 - fracty) * c.b +
+            fracty         * cy.b) +
+        fractx * (
+            (1.0 - fracty) * cx.b +
+            fracty         * cxy.b
+        )) * 0.995;
+    
+    
+    if (r > 1.4) r = 1.4;
+    if (g > 1.4) g = 1.4;
+    if (b > 1.4) b = 1.4;
+    gl_FragColor = vec4(r, g, b, 0);
+}
+
+        </script>
+            
+        <script> // Compute shaders!
+
+class ComputeShaderError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = 'ComputeShaderError';
+    }
+}
+class ComputeShader {
+    constructor(source, width, height) {
+        if (!ComputeShader.#gl) throw new ComputeShaderError(`Attempted to create a compute shader without a WebGL context`);
+        if (+width <= 0) throw new ComputeShaderError(`Attempted to create a compute shader without a width`);
+        if (+height <= 0) throw new ComputeShaderError(`Attempted to create a compute shader without a height`);
+
+        this.gl = ComputeShader.#gl;
+        this.width = width;
+        this.height = height;
+
+        this.vertexShader = ComputeShader.createShader(this.gl, this.gl.VERTEX_SHADER, ComputeShader.vertexShader);
+        this.fragmentShader = ComputeShader.createShader(this.gl, this.gl.FRAGMENT_SHADER, source);
+        this.program = ComputeShader.createProgram(this.gl, this.vertexShader, this.fragmentShader);
+        
+        this.aPos = this.gl.getAttribLocation(this.program, 'aPos');
+
+        this.posBuffer = this.gl.createBuffer();
+        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.posBuffer);
+        this.gl.bufferData(this.gl.ARRAY_BUFFER, ComputeShader.positions, this.gl.STATIC_DRAW);
+        
+        this.gl.vertexAttribPointer(
+            this.aPos,
+            2,
+            this.gl.FLOAT,
+            false,
+            0,
+            0,
+        );
+        this.gl.enableVertexAttribArray(this.aPos);
+
+        this.textureId = 0; 
+        this.ids = [];
+        this.inputs = {length: 0};
+        this.inputInfo = {length: 0}; // Information that changes between shaders (like id and such)
+        this.uniforms = {};
+        this.uniformsInfo = {};
+        this.attributes = [];
+        
+        this.output = {
+            frameBuffer: this.gl.createFramebuffer(),
+            texture: this.gl.createTexture(),
+            width: width,
+            height: height,
+            type: 'RGBA',
+        };
+        this.gl.bindTexture(this.gl.TEXTURE_2D, this.output.texture);
+        this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, this.width, this.height, 0, this.gl.RGBA, this.gl.FLOAT, new Float32Array(this.width * this.height * 4));
+        
+        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.NEAREST);
+        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MAG_FILTER, this.gl.NEAREST);
+        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_S, this.gl.CLAMP_TO_EDGE);
+        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_T, this.gl.CLAMP_TO_EDGE);
+    };
+    use(useCanvas = false) {
+        this.gl.useProgram(this.program);
+
+        if (useCanvas) this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
+        else {
+            this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, this.output.frameBuffer);
+            this.gl.framebufferTexture2D(this.gl.FRAMEBUFFER, this.gl.COLOR_ATTACHMENT0, this.gl.TEXTURE_2D, this.output.texture, 0);
+        }
+        this.gl.viewport(0, 0, this.width, this.height);
+    }
+    run() {
+        // if (this.gl.getParameter(this.gl.MAX_VERTEX_TEXTURE_IMAGE_UNITS) < this.inputs.length) throw new ComputeShaderError('WebGL cannot support the current number of inputs.');
+
+        for (const i in this.inputs) {
+            const input = this.inputs[i];
+            if (!input || i === 'length') continue;
+
+            this.gl.activeTexture(this.gl.TEXTURE0 + this.inputInfo[input.locationName].id);
+            this.gl.bindTexture(this.gl.TEXTURE_2D, input.texture);
+        }
+
+        this.gl.drawArrays(this.gl.TRIANGLES, 0, 3);
+    }
+    read(result = new Float32Array(this.width * this.height * 4)) {
+        this.gl.readPixels(0, 0, this.width, this.height, this.gl.RGBA, this.gl.FLOAT, result)
+        return result;
+    }
+    clear() {
+        this.gl.clearColor(0, 0, 0, 1);
+        this.gl.clear(this.gl.COLOR_BUFFER_BIT);
+    }
+    
+    addInput(input) {
+        if (this.inputs[input.locationName]) throw new ComputeShaderError(`The input name '${input.locationName}' is already taken.`);
+        if (this.inputs[input.locationName]?.shader) throw new ComputeShaderError(`The input '${input.locationName}' is being used by another shader.`);
+
+        const inputInfo = {};
+        this.inputInfo[input.locationName] = inputInfo;
+        inputInfo.id = this.ids.length ? this.ids.pop() : this.textureId ++;
+        inputInfo.location = this.gl.getUniformLocation(this.program, input.locationName),
+        inputInfo.dimensionsLocation = this.gl.getUniformLocation(this.program, input.locationName + 'Dimensions'),
+
+        this.inputs[input.locationName] = input;
+        this.inputs.length ++;
+    };
+    removeInput(input) {
+        if (!this.inputs[input.locationName]) console.warn(`The input '${input.locationName}' does not exist.`);
+
+        this.ids.push(input.id);
+        input.shader = this.inputInfo[input.locationName].id = this.inputInfo[input.locationName].location = this.inputInfo[input.locationName].dimensionsLocation = null;
+        this.inputs[input.locationName] = null;
+        this.inputs.length --;
+    }
+    initializeInputs() {
+        for (const i in this.inputs) {
+            if (!this.inputs[i] || i === 'length') continue;
+            const input = this.inputs[i];
+            
+            this.gl.uniform1i(this.inputInfo[input.locationName].location, this.inputInfo[input.locationName].id);
+            this.gl.uniform2fv(this.inputInfo[input.locationName].dimensionsLocation, [this.inputs[i].width, this.inputs[i].height]);
+        }
+    };
+    clearInputs() {
+        for (const i in this.inputs) {
+            if (!this.inputs[i] || i === 'length') continue;
+            this.removeInput(this.inputs[i]);
+        }
+        this.inputs = {length: 0};
+        this.textureId = 0;
+        this.ids.length = 0;
+    }
+    
+    addUniform(uniform) {
+        this.uniforms[uniform.locationName] = uniform;
+        this.uniformsInfo[uniform.locationName] = this.gl.getUniformLocation(this.program, uniform.locationName);
+    }
+    initializeUniforms() {
+        for (let i in this.uniforms) {
+            this.gl['uniform' + this.uniforms[i].type](this.uniformsInfo[i], this.uniforms[i].data);
+        }
+    }
+    clearUniforms() {
+        this.uniforms.length = 0;
+    }
+    
+    testInformation(action) {
+        if (!this.gl) throw new ComputeShaderError(`Attempted to ${action} without a WebGL context`);
+        if (!this.program) throw new ComputeShaderError(`Attempted to ${action} without a program`);
+    }
+
+    static vertexShader = `
+        attribute vec2 aPos;
+        void main() {
+            gl_Position = vec4(aPos, 0, 1);
+        }
+    `;
+    static positions = new Float32Array([
+        -1, -1,
+        3, -1,
+        -1, 3,
+    ]);
+    static createShader(gl, type, source) {
+        const shader = gl.createShader(type);
+        gl.shaderSource(shader, source);
+        gl.compileShader(shader);
+
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+            throw new ComputeShaderError('An error occured in a shader: ' + gl.getShaderInfoLog(shader));
+        }
+
+        return shader;
+    }
+    static createProgram(gl, vs, fs) {
+        const program = gl.createProgram();
+        gl.attachShader(program, vs);
+        gl.attachShader(program, fs);
+        gl.linkProgram(program);
+
+        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+            throw new ComputeShaderError('An error occured in a program: ' + gl.getProgramInfoLog(program));
+        }
+
+        return program;
+    }
+    
+    static createInput = (location, data, width, height, type = 'RGBA') => {
+        if (location === 'length') throw new ComputeShaderError(`The input name 'length' is a reserved name.`);
+
+        const tex = ComputeShader.#gl.createTexture();
+        ComputeShader.#gl.bindTexture(ComputeShader.#gl.TEXTURE_2D, tex);
+        ComputeShader.#gl.texImage2D(ComputeShader.#gl.TEXTURE_2D, 0, ComputeShader.#gl[type], width, height, 0, ComputeShader.#gl[type], ComputeShader.#gl.FLOAT, data);
+        
+        ComputeShader.#gl.texParameteri(ComputeShader.#gl.TEXTURE_2D, ComputeShader.#gl.TEXTURE_MIN_FILTER, ComputeShader.#gl.NEAREST);
+        ComputeShader.#gl.texParameteri(ComputeShader.#gl.TEXTURE_2D, ComputeShader.#gl.TEXTURE_MAG_FILTER, ComputeShader.#gl.NEAREST);
+        ComputeShader.#gl.texParameteri(ComputeShader.#gl.TEXTURE_2D, ComputeShader.#gl.TEXTURE_WRAP_S, ComputeShader.#gl.CLAMP_TO_EDGE);
+        ComputeShader.#gl.texParameteri(ComputeShader.#gl.TEXTURE_2D, ComputeShader.#gl.TEXTURE_WRAP_T, ComputeShader.#gl.CLAMP_TO_EDGE);
+        
+        const input = {
+            id: null,
+            texture: tex,
+            type: type,
+            locationName: location,
+            location: null,
+            dimensionsLocation: null,
+            width: width,
+            height: height,
+            frameBuffer: ComputeShader.#gl.createFramebuffer(),
+        };
+        ComputeShader.#gl.bindFramebuffer(ComputeShader.#gl.FRAMEBUFFER, input.frameBuffer);
+        ComputeShader.#gl.framebufferTexture2D(ComputeShader.#gl.FRAMEBUFFER, ComputeShader.#gl.COLOR_ATTACHMENT0, ComputeShader.#gl.TEXTURE_2D, input.texture, 0);
+        ComputeShader.#gl.viewport(0, 0, width, height);
+
+        return input;
+    };
+    static updateInput(input, data) {
+        ComputeShader.#gl.bindTexture(ComputeShader.#gl.TEXTURE_2D, input.texture);
+        ComputeShader.#gl.texImage2D(ComputeShader.#gl.TEXTURE_2D, 0, ComputeShader.#gl[input.type], input.width, input.height, 0, ComputeShader.#gl[input.type], ComputeShader.#gl.FLOAT, data);
+    }
+    static createUniform(location, type, data) {
+        const uniform = {
+            locationName: location,
+            type: type,
+            data: data,
+        };
+
+        return uniform;
+    }
+    static updateUniform(uniform, data) {
+        uniform.data = data;
+    }
+    static readInput(input, result = new Float32Array(input.width * input.height * 4)) {
+        ComputeShader.#gl.bindFramebuffer(ComputeShader.#gl.FRAMEBUFFER, input.frameBuffer);
+        ComputeShader.#gl.readPixels(0, 0, input.width, input.height, ComputeShader.#gl.RGBA, ComputeShader.#gl.FLOAT, result);
+        return result;
+    }
+    static swapTextures(input, input2) {
+        if (!input || !input2) throw new ComputeShaderError('swapTextures requires two inputs.');
+
+        const tempTex = input2.texture,
+            tempFB = input2.frameBuffer;
+        input2.texture = input.texture;
+        input2.frameBuffer = input.frameBuffer;
+        input.texture = tempTex;
+        input.frameBuffer = tempFB;
+    }
+
+    static createContext = () => {
+        const canvas = document.createElement('canvas');
+        return [canvas, canvas.getContext('webgl', {powerPreference: 'high-performance'})];
+    };
+    static useContext = gl => {
+        if (!gl.getExtension('OES_texture_float')) throw new ComputeShaderError(`Cannot get extention 'OES_texture_float'`);
+        if (!gl.getExtension("OES_texture_float_linear")) throw new ComputeShaderError(`Cannot get extention 'OES_texture_float_linear'`);
+        if (!gl.getExtension('WEBGL_color_buffer_float')) throw new ComputeShaderError(`Cannot get extention 'WEBGL_color_buffer_float'. Most smartphones do not support this, try switching to another device?`);
+        
+        ComputeShader.#gl = gl;
+    }
+    static #gl = null;
+}
+
+        </script>
+        <script> // Handles setup
+log.style.width = '100%';
+log.style.height = `calc(100% - 400px)`;
+
+const l = (...data) => {
+
+    for (const d of data) log.innerHTML += `<pre class = 'info'> ${d !== Object(d) ? d : d.toString() + ' '}</pre>`;
+
+    log.innerHTML += '<div class = "sep"><div>';
+    log.scrollTop = log.scrollHeight;
+};
+
+let touches = [],
+    ptouches = [];
+
+// const canvas = document.getElementById('canvas');
+//     ctx = canvas.getContext('2d');
+
+let mouseDown = false,
+    mx = 0,
+    my = 0,
+    pmx = 0,
+    pmy = 0,
+    mButton;
+
+
+const resolutionScale = 0.5,
+    iter = 10,
+    forceScale = 0.005,
+    diff = 0.01,
+    vStrength = 0;//0.009;
+
+const tau = Math.PI * 2;
+
+let screenSizeX = window.innerWidth,
+    screenSizeY = window.innerHeight,
+    gridSizeX = screenSizeX * resolutionScale | 0,
+    gridSizeY = screenSizeY * resolutionScale | 0,
+    arraySize = gridSizeX * gridSizeY,
+    glArraySize = gridSizeX * gridSizeY * 4,
+    centerX = gridSizeX * 0.5,
+    centerY = gridSizeY * 0.5;
+
+const [glCanvas, cgl] = ComputeShader.createContext();
+ComputeShader.useContext(cgl);
+glCanvas.width = gridSizeX
+glCanvas.height = gridSizeY;
+
+document.body.appendChild(glCanvas);
+
+function updateMouseUniforms() {
+    ComputeShader.updateUniform(mouseUniform, [mx * resolutionScale, (window.innerHeight - my) * resolutionScale]);
+    ComputeShader.updateUniform(pmouseUniform, [pmx * resolutionScale, (window.innerHeight - pmy) * resolutionScale]);
+}
+glCanvas.addEventListener('mousedown', e => {
+    e.preventDefault();
+    mouseDown = true, pmx = mx = e.offsetX, pmy = my = e.offsetY, mButton = e.button;
+    updateMouseUniforms();
+});
+glCanvas.addEventListener('mouseup', e => (mouseDown = false, pmx = mx = e.offsetX, pmy = my = e.offsetY));
+glCanvas.addEventListener('mousemove', e => {
+    pmx = mx, pmy = my, mx = e.offsetX, my = e.offsetY;
+    updateMouseUniforms();
+    // touches = e.touches;
+}, {passive: false});
+glCanvas.addEventListener('touchstart', e => {
+    e.preventDefault();
+    mouseDown = true, pmx = mx = e.touches[0].clientX, pmy = my = e.touches[0].clientY, mButton = e.button;
+    touches = e.touches;
+    ptouches = e.touches;
+    updateMouseUniforms();
+});
+glCanvas.addEventListener('touchend', e => {
+    mouseDown = false;
+    touches = [];
+});
+glCanvas.addEventListener('touchmove', e => {
+    ptouches = touches;
+    touches = e.touches;
+    // pmx = mx, pmy = my, mx = e.touches[0].clientX, my = e.touches[0].clientY;
+    // updateMouseUniforms();
+});
+glCanvas.addEventListener('contextmenu', e => e.preventDefault());
+
+let delta = 0,
+    pt = 0,
+    frame = 1;
+
+// window.onresize = () => {
+//     window.setTimeout(() => window.location.reload(), 100);
+// };
+
+        </script>
+        <script>
+
+
+const resize = () => {
+    screenSizeX = window.innerWidth;
+    screenSizeY = window.innerHeight;
+    gridSizeX = screenSizeX * resolutionScale | 0;
+    gridSizeY = screenSizeY * resolutionScale | 0;
+    arraySize = gridSizeX * gridSizeY;
+    glArraySize = gridSizeX * gridSizeY * 4;
+    centerX = gridSizeX * 0.5;
+    centerY = gridSizeY * 0.5;
+
+    glCanvas.width = gridSizeX
+    glCanvas.height = gridSizeY;
+
+    initialize();
+};
+
+let timer
+window.onresize = () => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(resize, 100);
+};
+
+
+const deg60 = Math.PI / 3;
+function HSLtoRGB(h, s, l) { // WHY DO COLORS YELL?
+    h %= tau;
+    const c = l * s,
+        x = c * (1 - Math.abs(h / deg60 % 2 - 1)),
+        m = l - c;
+    let r,
+        g,
+        b;
+    const hTest = h / deg60 | 0
+    switch(hTest) {
+        case 0:
+            r = c;
+            g = x;
+            b = 0;
+        break;
+        case 1:
+            r = x;
+            g = c;
+            b = 0;
+        break;
+        case 2:
+            r = 0;
+            g = c;
+            b = x;
+        break;
+        case 3:
+            r = 0;
+            g = x;
+            b = c;
+        break;
+        case 4:
+            r = x;
+            g = 0;
+            b = c;
+        break;
+        case 5:
+            r = c;
+            g = 0;
+            b = x;
+        break;
+    }
+    return [(r + m), (g + m), (b + m)];
+}
+
+function setBounds(dir, dataInput) {
+    ComputeShader.swapTextures(boundaryDataInput, dataInput);
+    setBoundaries.use();
+    ComputeShader.updateUniform(dirUniform, dir);
+    setBoundaries.initializeUniforms();
+    setBoundaries.initializeInputs();
+    setBoundaries.run();
+    ComputeShader.swapTextures(setBoundaries.output, dataInput);
+}
+function project() {
+    // ComputeShader.updateInput(pInput, new Float32Array(glArraySize));
+    for (let i = iter; i --;) {
+        project1.use();
+        project1.initializeInputs();
+        project1.run();
+        ComputeShader.swapTextures(project1.output, pInput);
+    }
+
+    project2.use();
+    project2.initializeInputs();
+    project2.run();
+    ComputeShader.swapTextures(project2.output, velInput);
+    setBounds(1, velInput);
+}
+
+let velInput,
+    newVelInput,
+    densityInput,
+    newDensityInput,
+    pInput,
+    boundaryDataInput;
+let mouseUniform,
+    pmouseUniform,
+    diffUniform,
+    vStrengthUniform,
+    dirUniform,
+    colUniform,
+    forceScaleUniform;
+let addVel,
+    addDensity,
+    diffuseVel,
+    vorticityConfinement,
+    advectVel,
+    project1,
+    project2,
+    setBoundaries,
+    diffuseDensity,
+    advectDensity,
+    renderToCanvas;
+
+// let velInput = ComputeShader.createInput('vel', new Float32Array(glArraySize), gridSizeX, gridSizeY),
+//     newVelInput = ComputeShader.createInput('newVel', new Float32Array(glArraySize), gridSizeX, gridSizeY),
+//     densityInput = ComputeShader.createInput('density', new Float32Array(glArraySize), gridSizeX, gridSizeY),
+//     newDensityInput = ComputeShader.createInput('newDensity', new Float32Array(glArraySize), gridSizeX, gridSizeY),
+//     pInput = ComputeShader.createInput('p', new Float32Array(glArraySize), gridSizeX, gridSizeY),
+//     boundaryDataInput = ComputeShader.createInput('data', new Float32Array(glArraySize), gridSizeX, gridSizeY);
+// let mouseUniform = ComputeShader.createUniform('mouse', '2fv', [0, 0]),
+//     pmouseUniform = ComputeShader.createUniform('pmouse', '2fv', [0, 0]),
+//     diffUniform = ComputeShader.createUniform('diff', '1f', 0.1),
+//     vStrengthUniform = ComputeShader.createUniform('vStrength', '1f', vStrength),
+//     dirUniform = ComputeShader.createUniform('dir', '1i', 0),
+//     colUniform = ComputeShader.createUniform('col', '3fv', [0, 0, 0]),
+//     forceScaleUniform = ComputeShader.createUniform('forceScale', '1f', forceScale);
+
+const initialize = () => {
+    velInput = ComputeShader.createInput('vel', new Float32Array(glArraySize), gridSizeX, gridSizeY),
+    newVelInput = ComputeShader.createInput('newVel', new Float32Array(glArraySize), gridSizeX, gridSizeY),
+    densityInput = ComputeShader.createInput('density', new Float32Array(glArraySize), gridSizeX, gridSizeY),
+    newDensityInput = ComputeShader.createInput('newDensity', new Float32Array(glArraySize), gridSizeX, gridSizeY),
+    pInput = ComputeShader.createInput('p', new Float32Array(glArraySize), gridSizeX, gridSizeY),
+    boundaryDataInput = ComputeShader.createInput('data', new Float32Array(glArraySize), gridSizeX, gridSizeY);
+    mouseUniform = ComputeShader.createUniform('mouse', '2fv', [0, 0]),
+    pmouseUniform = ComputeShader.createUniform('pmouse', '2fv', [0, 0]),
+    diffUniform = ComputeShader.createUniform('diff', '1f', 0.1),
+    vStrengthUniform = ComputeShader.createUniform('vStrength', '1f', vStrength),
+    dirUniform = ComputeShader.createUniform('dir', '1i', 0),
+    colUniform = ComputeShader.createUniform('col', '3fv', [0, 0, 0]),
+    forceScaleUniform = ComputeShader.createUniform('forceScale', '1f', forceScale);
+
+    addVel = new ComputeShader(document.getElementById('add-vel').textContent, gridSizeX, gridSizeY);
+    addVel.addInput(velInput);
+    addVel.addUniform(mouseUniform);
+    addVel.addUniform(pmouseUniform);
+    addVel.addUniform(forceScaleUniform);
+    addVel.use();
+    addVel.initializeUniforms();
+
+    addDensity = new ComputeShader(document.getElementById('add-density').textContent, gridSizeX, gridSizeY);
+    addDensity.addInput(densityInput);
+    addDensity.addUniform(mouseUniform);
+    addDensity.addUniform(colUniform);
+    addDensity.addUniform(forceScaleUniform);
+    addDensity.use();
+    addDensity.initializeUniforms();
+
+    diffuseVel = new ComputeShader(document.getElementById('diffuse-vel').textContent, gridSizeX, gridSizeY);
+    diffuseVel.addInput(velInput);
+    diffuseVel.addInput(newVelInput);
+    diffuseVel.addUniform(diffUniform);
+    diffuseVel.use();
+    diffuseVel.initializeUniforms();
+
+    vorticityConfinement = new ComputeShader(document.getElementById('vorticity-confinement').textContent, gridSizeX, gridSizeY);
+    vorticityConfinement.addInput(velInput);
+    vorticityConfinement.addUniform(vStrengthUniform);
+    vorticityConfinement.use();
+    vorticityConfinement.initializeUniforms();
+
+    advectVel = new ComputeShader(document.getElementById('advect-vel').textContent, gridSizeX, gridSizeY);
+    advectVel.addInput(velInput);
+
+    project1 = new ComputeShader(document.getElementById('project1').textContent, gridSizeX, gridSizeY);
+    project1.addInput(velInput);
+    project1.addInput(pInput);
+
+    project2 = new ComputeShader(document.getElementById('project2').textContent, gridSizeX, gridSizeY);
+    project2.addInput(velInput);
+    project2.addInput(pInput);
+
+    setBoundaries = new ComputeShader(document.getElementById('set-boundaries').textContent, gridSizeX, gridSizeY);
+    setBoundaries.addInput(boundaryDataInput);
+    setBoundaries.addUniform(dirUniform);
+
+    diffuseDensity = new ComputeShader(document.getElementById('diffuse-density').textContent, gridSizeX, gridSizeY);
+    diffuseDensity.addInput(densityInput);
+    diffuseDensity.addInput(newDensityInput);
+    diffuseDensity.addUniform(diffUniform);
+    diffuseDensity.use();
+    diffuseDensity.initializeUniforms();
+        
+    advectDensity = new ComputeShader(document.getElementById('advect-density').textContent, gridSizeX, gridSizeY);
+    advectDensity.addInput(densityInput);
+    advectDensity.addInput(velInput);
+
+    renderToCanvas = new ComputeShader(document.getElementById('render').textContent, gridSizeX, gridSizeY);
+    renderToCanvas.addInput(densityInput);
+}
+
+initialize();
+
+const addFunc = () => {
+    if (mouseDown) {
+        if (touches.length) {
+            for (let i = 0; i < touches.length; i ++) {
+                pmx = ptouches[i].clientX, pmy = ptouches[i].clientY;
+                mx = touches[i].clientX, my = touches[i].clientY;
+                updateMouseUniforms();
+                addVelFunc();
+
+                addDensityFunc();
+            }
+        } else {
+            addVelFunc();
+
+            addDensityFunc();
+        }
+    }
+};
+const addVelFunc = () => {
+    addVel.use();
+    addVel.initializeUniforms();
+    addVel.initializeInputs();
+    addVel.run();
+    ComputeShader.swapTextures(addVel.output, velInput);
+};
+const addDensityFunc = () => {
+    addDensity.use();
+    addDensity.initializeUniforms();
+    addDensity.initializeInputs();
+    addDensity.run();
+    ComputeShader.swapTextures(addDensity.output, densityInput);
+};
+const advect = () => {
+    advectVel.use();
+    advectVel.initializeInputs();
+    advectVel.run();
+    ComputeShader.swapTextures(advectVel.output, velInput);
+};
+const diffuseVelFunc = () => {
+    for (let i = iter; i --;) {
+        diffuseVel.use();
+        diffuseVel.initializeInputs();
+        diffuseVel.run();
+        ComputeShader.swapTextures(diffuseVel.output, newVelInput);
+        setBounds(0, newVelInput);
+    }
+    ComputeShader.swapTextures(diffuseVel.output, velInput);
+};
+const vorticyConfinementFunc = () => {
+    vorticityConfinement.use();
+    vorticityConfinement.initializeInputs();
+    vorticityConfinement.run();
+    ComputeShader.swapTextures(vorticityConfinement.output, velInput);
+};
+const diffuseDensityFunc = () => {
+    for (let i = iter; i --;) {
+        diffuseDensity.use();
+        diffuseDensity.initializeInputs();
+        diffuseDensity.run();
+        ComputeShader.swapTextures(diffuseDensity.output, newDensityInput);
+    }
+    ComputeShader.swapTextures(diffuseDensity.output, newDensityInput);
+};
+const advectDensityFunc = () => {
+    advectDensity.use();
+    advectDensity.initializeInputs();
+    advectDensity.run();
+    ComputeShader.swapTextures(advectDensity.output, densityInput);
+};
+const renderFunc = () => {
+    renderToCanvas.use(true); // Render to the canvas
+    renderToCanvas.initializeInputs();
+    renderToCanvas.run();
+
+    // ctx.clearRect(0, 0, gridSizeX, gridSizeY);
+    // ctx.drawImage(glCanvas, 0, 0);
+};
+
+
+function main() {
+    function render(t) {
+        try {
+            ComputeShader.updateUniform(colUniform, HSLtoRGB(frame / 5, Math.random() * 0.5 + 0.5, 0.1));
+
+            addFunc();
+
+            // ComputeShader.updateInput(newVelInput, new Float32Array(glArraySize));
+            diffuseVelFunc();
+            
+            // vorticyConfinementFunc();
+            setBounds(0, velInput);
+            
+            project();
+
+            advect();
+            setBounds(0, velInput);
+
+            project();
+            
+            diffuseDensityFunc();
+            
+            advectDensityFunc();
+            
+            renderFunc();
+            
+            delta = t - pt;
+            pt = t;
+
+            frame ++;
+            window.requestAnimationFrame(render);
+        } catch(e) {
+            document.body.textContent = e;
+        }
+    }
+    render();
+}
+main();
+
+        </script>
+    </body>
+</html>

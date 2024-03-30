@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html>
+<!--
+Reaction Diffusion
+Finished: 
+
+
+-->
+<head>
+    <style>
+        * {
+            margin: 0;
+            overflow: hidden;
+        }
+
+        body {
+            background-color: gray;
+        }
+
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            display: block;
+            margin: auto;
+
+            /* transform: scale(0.5, -0.5); */
+
+            /* background-color: white; */
+        }
+
+        #canvas {
+            z-index: 10;
+        }
+    </style>
+</head>
+
+<body>
+    <canvas id='canvas'></canvas>
+    <!--  -->
+    <script id='reaction-diffusion-source' type='glsl'>
+precision highp float;
+
+uniform sampler2D chemicals;
+uniform vec2 chemicalsDim;
+
+
+uniform float da; // Diffusion rate for A
+uniform float db; // Diffusion rate for B
+uniform float f; // Feed
+uniform float k; // Kill
+
+vec4 getCol(vec2 pos) {
+    return texture2D(chemicals, pos / chemicalsDim);;
+}
+
+const float h = 0.001;
+const vec2 vh = vec2(h, 0);
+const vec2 vk = vec2(0, h);
+
+float laplacianA(vec2 pos) {
+    return (getCol(pos + vh).x - getCol(pos - vh).x) / (2.0 * h) +
+        (getCol(pos + vk).x - getCol(pos - vk).x) / (2.0 * h);
+}
+float convolveA(vec2 pos) {
+    return -getCol(pos).x +
+        (0.2 * (
+            getCol(vec2(pos.x + 1.0, pos.y      )).x +
+            getCol(vec2(pos.x,       pos.y + 1.0)).x +
+            getCol(vec2(pos.x - 1.0, pos.y      )).x +
+            getCol(vec2(pos.x,       pos.y - 1.0)).x
+        ) +
+        0.05 * (
+            getCol(vec2(pos.x + 1.0, pos.y + 1.0)).x +
+            getCol(vec2(pos.x + 1.0, pos.y - 1.0)).x +
+            getCol(vec2(pos.x - 1.0, pos.y - 1.0)).x +
+            getCol(vec2(pos.x - 1.0, pos.y + 1.0)).x
+        ));
+    
+    //-laplacianA(pos) +
+    //    0.2 * (
+    //        laplacianA(vec2(pos.x + 1.0, pos.y      )) +
+    //        laplacianA(vec2(pos.x,       pos.y + 1.0)) +
+    //        laplacianA(vec2(pos.x - 1.0, pos.y      )) +
+    //        laplacianA(vec2(pos.x,       pos.y - 1.0))
+    //    ) +
+    //    0.05 * (
+    //        laplacianA(vec2(pos.x + 1.0, pos.y + 1.0)) +
+    //        laplacianA(vec2(pos.x + 1.0, pos.y - 1.0)) +
+    //        laplacianA(vec2(pos.x - 1.0, pos.y - 1.0)) +
+    //        laplacianA(vec2(pos.x - 1.0, pos.y + 1.0))
+    //    );
+}
+
+
+float laplacianB(vec2 pos) {
+    return (getCol(pos + vh).y - getCol(pos - vh).y) / (2.0 * h) +
+        (getCol(pos + vk).y - getCol(pos - vk).y) / (2.0 * h);
+}
+float convolveB(vec2 pos) {
+    return -getCol(pos).y +
+        0.2 * (
+            getCol(vec2(pos.x + 1.0, pos.y      )).y +
+            getCol(vec2(pos.x,       pos.y + 1.0)).y +
+            getCol(vec2(pos.x - 1.0, pos.y      )).y +
+            getCol(vec2(pos.x,       pos.y - 1.0)).y
+        ) +
+        0.05 * (
+            getCol(vec2(pos.x + 1.0, pos.y + 1.0)).y +
+            getCol(vec2(pos.x + 1.0, pos.y - 1.0)).y +
+            getCol(vec2(pos.x - 1.0, pos.y - 1.0)).y +
+            getCol(vec2(pos.x - 1.0, pos.y + 1.0)).y
+        );
+    
+    //-laplacianB(pos) +
+    //    0.2 * (
+    //        laplacianB(vec2(pos.x + 1.0, pos.y      )) +
+    //        laplacianB(vec2(pos.x,       pos.y + 1.0)) +
+    //        laplacianB(vec2(pos.x - 1.0, pos.y      )) +
+    //        laplacianB(vec2(pos.x,       pos.y - 1.0))
+    //    ) +
+    //    0.05 * (
+    //        laplacianB(vec2(pos.x + 1.0, pos.y + 1.0)) +
+    //        laplacianB(vec2(pos.x + 1.0, pos.y - 1.0)) +
+    //        laplacianB(vec2(pos.x - 1.0, pos.y - 1.0)) +
+    //        laplacianB(vec2(pos.x - 1.0, pos.y + 1.0))
+    //    );
+}
+
+
+void main() {
+    vec2 pos = gl_FragCoord.xy;
+    vec4 col = getCol(pos);
+
+    float a = col.x + (da * convolveA(pos) - col.x * col.y * col.y + f * (1.0 - col.x));
+    float b = col.y + (db * convolveB(pos) + col.x * col.y * col.y - (k + f) * col.y);
+
+    gl_FragColor = vec4(a, b, 0, 0);
+}
+
+        </script>
+        <script id='render-source' type='glsl'>
+precision highp float;
+
+uniform sampler2D chemicals;
+uniform vec2 chemicalsDim;
+
+const vec3 baseCol = vec3(0.1, 0.1, 0.1);
+const vec3 interCol = vec3(207.0 / 255.0, 108.0 / 255.0, 2.0 / 255.0) / 1.5;
+const vec3 highCol = vec3(247.0 / 255.0, 202.0 / 255.0, 119.0 / 255.0);
+
+void main() {
+    vec4 chem = texture2D(chemicals, 0.5 * gl_FragCoord.xy / chemicalsDim) * 2.5;
+    
+    vec3 col = vec3(0, 0, 0);
+    if (chem.y < 0.8) col = mix(baseCol, interCol, chem.y / 0.8);
+    else col = mix(interCol, highCol, (chem.y - 0.2) / 0.2);
+
+    gl_FragColor = vec4(col, 1);
+}
+
+        </script>
+
+    <script src='https://cdn.jsdelivr.net/gh/staplecactus764/webgl-compute-shader@v1.0.5/main.js'></script>
+    <script>
+
+const canvas = document.getElementById('canvas'),
+    ctx = canvas.getContext('2d');
+const cgl = new ComputeShaderContext(),
+    glCanvas = cgl.canvas,
+    gl = cgl.context;
+
+glCanvas.id = 'gl-canvas';
+document.body.appendChild(glCanvas);
+
+const tau = Math.PI * 2,
+    qt = Math.PI / 2; // Quarter turn
+const width = window.innerWidth * 2,
+    height = window.innerHeight * 2;
+
+canvas.width = glCanvas.width = width;
+canvas.height = glCanvas.height = height;
+
+
+ComputeShader.useContext(cgl);
+
+glCanvas.style.transform = `scale(0.5, -0.5) translate(${-width / 2}px, ${height / 2}px)`;//, 
+
+const minDim = width < height ? width : height;
+
+const lerp = (a, b, t) => a + (b - a) * t;
+
+const data = new Float32Array((width * 0.5) * (height * 0.5) * 4);
+const fillData = (radius = 30) => {
+    for (let y = 0; y < height * 0.5; y ++) {
+        for (let x = 0; x < width * 0.5; x ++) {
+            const i = (y * width * 0.5 + x) * 4;
+
+            const dist = Math.sqrt((x - width / 2 * 0.5) * (x - width / 2 * 0.5) + (y - height / 2 * 0.5) * (y - height / 2 * 0.5));
+            if (dist < radius) data[i + 1] = 1, data[i] = 0;// - dist / 50;
+            else data[i] = 1, data[i + 1] = 0;
+        }
+    }
+};
+fillData();
+
+
+const chemicals = new ComputeShaderInput('chemicals', data, width * 0.5, height * 0.5);
+const da = new ComputeShaderUniform('da', '1f', 1);
+const db = new ComputeShaderUniform('db', '1f', 0.5);
+const f = new ComputeShaderUniform('f', '1f', 0.01);//0.07);//0.023);//0.055);
+const k = new ComputeShaderUniform('k', '1f', 0.047);//0.06);//0.05);//0.062);
+
+const cs = new ComputeShader(document.getElementById('reaction-diffusion-source').textContent, width * 0.5, height * 0.5);
+cs.addInput(chemicals);
+cs.addUniform(da);
+cs.addUniform(db);
+cs.addUniform(f);
+cs.addUniform(k);
+
+const timers = {
+    all: [],
+    queue: [],
+    add(func, time, absolute = false) {
+        (absolute ? this.all : this.queue).push({
+            func: func,
+            frames: time * 60,
+            absolute: absolute,
+        });
+        // console.log(this.all, this. queue);
+    },
+    run() {
+        if (this.all.length === 0 && this.queue.length) this.all.push(this.queue.shift());
+        for (let i = this.all.length; i --;) {
+            if (this.all[i].frames-- < 0) {
+                this.all[i].func();
+                if (!this.all[i].absolute && this.queue.length) {
+                    this.all.push(this.queue.shift());
+                }
+                this.all.splice(i, 1);
+            }
+        }
+    }
+};
+
+const addEvents = () => {
+    timers.add(() => {
+        f.update(0.01);
+        k.update(0.047);
+    }, 0);
+    timers.add(() => {
+        f.update(0.01);
+        k.update(0.06);
+    }, 20);
+    timers.add(() => {
+        fillData();
+        chemicals.update(data);
+        f.update(0.07);
+        k.update(0.06);
+    }, 0.3);
+    timers.add(() => {
+        f.update(0.03);
+        k.update(0.06);
+    }, 20);
+    timers.add(() => {
+        f.update(0.055);
+        k.update(0.062);
+    }, 20);
+    timers.add(() => {
+        f.update(0.01);
+        k.update(0.06);
+    }, 7);
+    timers.add(() => {
+        fillData();
+        chemicals.update(data);
+        f.update(0.045);
+        k.update(0.06);
+    }, 0.3);
+    timers.add(() => {
+        f.update(0.0545);
+        k.update(0.062);
+    }, 20);
+    timers.add(() => {
+        f.update(0.01);
+        k.update(0.06);
+    }, 10);
+    timers.add(() => {
+        fillData();
+        chemicals.update(data);
+        f.update(0.023);
+        k.update(0.05);
+    }, 0.3);
+    timers.add(() => {
+        f.update(0.03);
+        k.update(0.06);
+    }, 20);
+    timers.add(() => {
+        f.update(0.01);
+        k.update(0.06);
+    }, 14);
+    timers.add(() => {
+        fillData(200);
+        chemicals.update(data);
+        f.update(0.07);
+        k.update(0.06);
+    }, 0.3);
+    timers.add(() => {
+        f.update(0.045);
+        k.update(0.06);
+    }, 15);
+    timers.add(() => {
+        for (let y = 0; y < height * 0.5; y ++) {
+            for (let x = 0; x < width * 0.5; x ++) {
+                const i = (y * width * 0.5 + x) * 4;
+
+                const dist = Math.sqrt((x - width / 2 * 0.5) * (x - width / 2 * 0.5) + (y - height / 2 * 0.5) * (y - height / 2 * 0.5));
+                if (dist < 3) data[i + 1] = Math.random(), data[i] = 0;
+            }
+        }
+        chemicals.update(data);
+        f.update(0.017);
+        k.update(0.053);
+    }, 15);
+    timers.add(() => {
+        f.update(0.049);
+        k.update(0.06);
+    }, 15);
+    timers.add(() => {
+        f.update(0.01);
+        k.update(0.06);
+    }, 14);
+    timers.add(() => {
+        fillData(2);
+        chemicals.update(data);
+        f.update(0.0367);
+        k.update(0.0649);
+    }, 0.3);
+    timers.add(() => {
+        addEvents();
+    }, 15);
+}
+addEvents();
+
+const render = new ComputeShader(document.getElementById('render-source').textContent, width, height);
+render.addInput(chemicals);
+
+function loop() {
+    timers.run();
+
+    for (let i = 0; i < 10; i ++) {
+        cs.use();
+        cs.initializeInputs();
+        cs.initializeUniforms();
+        cs.run();
+        ComputeShader.swap(cs.output, chemicals);
+    }
+
+    render.use(true);
+    render.initializeInputs();
+    render.run();
+
+    window.requestAnimationFrame(loop);
+}
+loop();
+
+
+
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,1250 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <style>
+            * {
+                margin: 0;
+            }
+            #error {
+                width: 400px;
+                height: 50px;
+            }
+        </style>
+    </head>
+    <body>
+    <canvas id = 'canvas'></canvas>
+
+    <pre id = 'error'></pre>
+
+    <script id = 'vertex-shader' type = 'glsl'>
+        attribute vec2 aPos;
+        varying vec2 vPos;
+
+        void main() {
+            vPos = aPos;
+            gl_Position = vec4(aPos, 0, 1);
+        }
+        
+    </script>
+    <script id = 'fragment-shader' type = 'glsl'>
+        precision highp float;
+        
+        varying vec2 vPos;
+        
+        uniform float randOffset;
+        float rand(vec2 co) {
+            co += randOffset;
+            return fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453);
+        }
+        vec3 randus(vec2 co) {
+            return normalize(vec3(rand(co), rand(co + 1.0), rand(co + 2.0)) * 2.0 - 1.0);
+        }
+        float standardRand(vec2 co) {
+            float u = 1.0 - rand(co + randOffset);
+            float v = rand(co - randOffset);
+            return sqrt(-2.0 * log(u)) * cos(2.0 * 3.14159 * v);
+        }
+
+        struct Sphere {
+            vec3 pos;
+            float rad;
+            vec3 col;
+            float type;
+            float fuzz;
+            float albedo;
+        };
+        struct Plane {
+            vec3 pos;
+            vec3 normal;
+            vec2 dim;
+            vec3 col;
+            float type;
+            float fuzz;
+            float albedo;
+        };
+        struct Rect {
+            vec3 pos;
+            vec2 dim;
+        };
+
+        struct Light {
+            vec3 pos;
+            float rad;
+            vec3 emmitted;
+            float dim;
+        };
+        struct Ray {
+            vec3 pos;
+            vec3 dir;
+        };
+
+        struct ShadowInfo {
+            Light l;
+            bool hit;
+        };
+        struct HitObject {
+            int type;
+            Light hitLight;
+            Sphere hitSphere;
+        };
+
+        vec3 getRayAt(Ray ray, float dist) {
+            return ray.pos + ray.dir * dist;
+        }
+
+        float epsilon = 0.00001;
+        float sphereIntersect(Sphere sphere, Ray ray) { // Returns distance to sphere
+            vec3 oc = ray.pos - sphere.pos;
+            float a = dot(ray.dir, ray.dir);
+            float b = dot(oc, ray.dir);
+            float c = dot(oc, oc) - sphere.rad * sphere.rad;
+            float result = b*b-a*c;
+            if (result < 0.0) return -1.0;
+            
+            float sqrtR = sqrt(result);
+            float r = (-b - sqrtR) / a;
+            if (r < epsilon) {
+                r = (-b + sqrtR) / a;
+                if (r < epsilon) return -1.0;
+            }
+            
+            return r;
+        }
+        float lightIntersect(Light light, Ray ray) {
+            vec3 oc = ray.pos - light.pos;
+            float a = dot(ray.dir, ray.dir);
+            float b = dot(oc, ray.dir);
+            float c = dot(oc, oc) - light.rad * light.rad;
+            float result = b*b-a*c;
+            if (result < 0.0) return -1.0;
+            
+            float sqrtR = sqrt(result);
+            float r = (-b - sqrtR) / a;
+            if (r < epsilon) {
+                r = (-b + sqrtR) / a;
+                if (r < epsilon) return -1.0;
+            }
+            
+            return r;
+        }
+
+        const float qt = 3.14159 * 0.5; // Quarter turn
+        vec4 planeIntersect(Plane plane, Ray ray) {
+            float d = dot(plane.pos - ray.pos, plane.normal) / dot(ray.dir, plane.normal);
+
+            vec3 hit = getRayAt(ray, d);
+            vec3 orig = hit;
+
+            hit -= plane.pos;
+
+            // Angles to move the normal to (0, 1, 0)
+            float rotz = qt - atan(plane.normal.y / plane.normal.x),
+                rotx = qt - atan(plane.normal.y / plane.normal.z);
+
+            vec3 temp = hit;
+            float cosz = cos(rotz),
+                sinz = sin(rotz),
+                cosx = cos(rotx),
+                sinx = sin(rotx);
+            hit.x = cosz * temp.x - sinz * temp.y;
+            hit.y = sinz * temp.x + cosz * temp.y;
+            temp = hit;
+            hit.y = cosx * temp.y - sinx * temp.z;
+            hit.z = sinx * temp.y + cosx * temp.z;
+            
+
+            if (hit.x < 0.0 || hit.x > plane.dim.x ||
+                hit.z < 0.0 || hit.z > plane.dim.y) return vec4(vec3(0, 0, 0), -1.0);
+
+            return vec4(orig, d > epsilon && dot(plane.normal, ray.dir) < epsilon ? d : -1.0); //  > 0.0 ? a : -1.0
+        }
+        
+
+
+        const int sphereNum = *sphereNum*;
+        const int sphereCompNum = *sphereNum* * *sphereCompSize*;
+        uniform float sphereObjs[sphereCompNum];
+        Sphere spheres[*sphereNum*];
+
+        const int planeNum = *planeNum*;
+        const int planeCompNum = *planeNum* * *planeCompSize*;
+        uniform float planeObjs[planeCompNum];
+        Plane planes[*planeNum*];
+
+        const int rectNum = *rectNum*;
+        const int rectCompNum = *rectNum* * *rectCompSize*;
+        uniform float rectObjs[rectCompNum];
+        Rect rects[*rectNum*];
+
+        const int lightNum = *lightNum*;
+        const int lightCompNum = *lightNum* * *lightCompSize*;
+        uniform float lightObjs[lightCompNum];
+        Light lights[*lightNum*];
+
+        
+        const bool skyIsLight = false;
+        float bounceStrength = skyIsLight ? 1.0 : 0.5;
+
+        const int maxDepth = 10;
+        const float ambientLight = 0.5;
+
+        float projectRay(Ray ray) {
+            float min;
+
+            // Intersection loops
+            for (int i = 0; i < *sphereNum*; i ++) {
+                Sphere s = spheres[i];
+                float dist = sphereIntersect(s, ray);
+
+                if (dist != -1.0 && dist < min) min = dist;
+            }
+            for (int i = 0; i < planeNum; i ++) {
+                Plane p = planes[i];
+                vec4 intersection = planeIntersect(p, ray);
+
+                if (intersection.w < min && intersection.w != -1.0) min = intersection.w;
+            }
+            for (int i = 0; i < lightNum; i ++) {
+                Light l = lights[i];
+                float dist = lightIntersect(l, ray);
+
+                if (dist < min && dist != -1.0) min = dist;
+            }
+
+            return min;
+        }
+        ShadowInfo inShadow(vec3 origin, vec2 offset) {
+            float min = 1000.0; // Basic information
+            bool lightHitLast;
+            Light hitLight;
+
+
+            // Intersection loops
+            for (int i = 0; i < lightNum; i ++) {
+                Light l = lights[i];
+                Ray ray = Ray(origin, normalize(l.pos + normalize(randus(origin.xy + offset)) * l.rad - origin)); // Create a new ray that points towards the light with a random offset the size of the light's radius
+
+                float dist = lightIntersect(l, ray);
+
+                if (dist < min && dist != -1.0) {
+                    min = dist;
+
+                    hitLight = l;
+
+                    lightHitLast = true;
+                }
+
+                for (int i = 0; i < *sphereNum*; i ++) {
+                    Sphere s = spheres[i];
+                    float dist = sphereIntersect(s, ray);
+
+                    if (dist != -1.0 && dist < min) {
+                        min = dist;
+
+                        lightHitLast = false;
+                    }
+                }
+                for (int i = 0; i < planeNum; i ++) {
+                    Plane p = planes[i];
+                    vec4 intersection = planeIntersect(p, ray);
+
+                    if (intersection.w < min && intersection.w != -1.0) {
+                        min = intersection.w;
+
+                        lightHitLast = false;
+                    }
+                }
+            
+                
+            }
+
+            return ShadowInfo(hitLight, lightHitLast);
+        }
+        vec4 rayColor(Ray ray, vec2 offset) {
+
+            vec3 totalCol,
+                luminosity;
+            float bounces = 0.0;
+
+            for (int depth = 0; depth < maxDepth; depth ++) {
+                float min = 1000.0; // Basic information
+                int type = -1;
+                
+                // Information about what was intersected
+                Sphere hitSphere;
+                Plane hitPlane;
+                Light hitLight;
+                vec3 hitNormal;
+
+                // Intersection loops
+                for (int i = 0; i < *sphereNum*; i ++) {
+                    Sphere s = spheres[i];
+                    float dist = sphereIntersect(s, ray);
+
+                    if (dist != -1.0 && dist < min) {
+                        min = dist;
+                        type = 0;
+
+                        hitSphere = s;
+                    }
+                }
+                for (int i = 0; i < planeNum; i ++) {
+                    Plane p = planes[i];
+                    vec4 intersection = planeIntersect(p, ray);
+
+                    if (intersection.w < min && intersection.w != -1.0) {
+                        min = intersection.w;
+                        type = 1;
+
+                        hitPlane = p;
+                    }
+                }
+                for (int i = 0; i < lightNum; i ++) {
+                    Light l = lights[i];
+                    float dist = lightIntersect(l, ray);
+
+                    if (dist < min && dist != -1.0) {
+                        min = dist;
+                        type = 2;
+
+                        hitLight = l;
+                    }
+                }
+
+                if (min == 1000.0) continue;
+
+                vec3 col,
+                    newPos = getRayAt(ray, min);
+                bool lightHit = false,
+                    addBounce = true;
+                if (type == 0) { // Sphere
+                    hitNormal = normalize(newPos - hitSphere.pos);
+
+                    if (hitSphere.type == 0.0) {
+                        col = hitSphere.col;
+                    } else {
+                        addBounce = false;
+                    }
+
+                    if (hitSphere.type == 0.0 || hitSphere.type == 1.0) {
+                        ray.dir = normalize(mix(reflect(ray.dir, hitNormal), normalize(hitNormal + randus(vPos + offset + randOffset)), hitSphere.fuzz));
+                    } else {
+                        // hitNormal = normalize(hitNormal + randus(vPos + offset + randOffset) * 0.1);
+                        ray.dir = dot(hitNormal, ray.dir) > 0.0 ? refract(ray.dir, -hitNormal, 1.5) : refract(ray.dir, hitNormal, 1.0/1.5);
+                    }
+                } else if (type == 1) { // Plane
+                    hitNormal = hitPlane.normal;
+                    
+                    ray.dir = normalize(mix(reflect(ray.dir, hitNormal), normalize(hitNormal + randus(vPos + offset + randOffset)), hitPlane.fuzz));
+                    
+                    if (hitPlane.type == 0.0) {
+                        col = hitPlane.col;
+                    } else {
+                        addBounce = false;
+                    }
+                } else if (type == 2) { // Light
+                    hitNormal = normalize(newPos - hitLight.pos);
+
+                    col = hitLight.emmitted;
+                    lightHit = true;
+                }
+
+                // Updates persistant values
+                ray.pos = newPos;
+                // ray.dir = normalize(hitNormal + randus(vPos + offset + randOffset));
+
+                
+                bounces += addBounce ? 1.0 : 0.1;
+                
+                ShadowInfo shaded = inShadow(newPos, offset + randOffset);
+
+                if (type == 0 || type == 1) {
+                    if (shaded.hit) {
+                        float distToLight = length(newPos - shaded.l.pos);
+                        totalCol += col * pow(0.5, float(bounces)) / pow(distToLight, shaded.l.dim) * shaded.l.emmitted;
+                    } else {
+                        float distToLight = length(newPos - shaded.l.pos);
+                        totalCol += col * pow(0.5, float(bounces)) / distToLight * shaded.l.emmitted;
+                    }
+                } else if (type == 2) {
+                    totalCol = hitLight.emmitted;
+                }
+                
+                if (lightHit) break;
+            }
+
+            return vec4(totalCol / sqrt(bounces),1);//vec4(normalize(vec3(min,0,0)),1);
+        }
+
+        const int spa = 1; // Samples per axis
+        const float samples = float(spa * spa);
+        void main() {
+            // All zero
+            float camx = 0.0,//0.45,
+                  camy = 0.0,//2.8,//0.6,
+                  camz = 0.0;
+
+            float sinCamX = sin(camx),
+                  cosCamX = cos(camx),
+                  sinCamY = sin(camy),
+                  cosCamY = cos(camy),
+                  sinCamZ = sin(camz),
+                  cosCamZ = cos(camz);
+            mat3 rotx = mat3(
+                1, 0, 0,
+                0, cosCamX, -sinCamX,
+                0, sinCamX, cosCamX
+            );
+            mat3 roty = mat3(
+                cosCamY, 0, sinCamY,
+                0, 1, 0,
+                -sinCamY, 0, cosCamY
+            );
+            mat3 rotz = mat3(
+                cosCamZ, -sinCamZ, 0,
+                sinCamZ, cosCamZ, 0,
+                0, 0, 1
+            );
+
+            for (int i = 0; i < sphereCompNum; i += *sphereCompSize*) {
+                spheres[i / *sphereCompSize*] = Sphere(
+                    vec3(sphereObjs[i], sphereObjs[i + 1], sphereObjs[i + 2]), // Position
+                    sphereObjs[i + 3], // Radius
+                    vec3(sphereObjs[i + 4], sphereObjs[i + 5], sphereObjs[i + 6]), // Color
+                    sphereObjs[i + 7], // Type
+                    sphereObjs[i + 8], // Fuzz
+                    sphereObjs[i + 9] // Albedo
+                );
+            }
+            for (int i = 0; i < planeCompNum; i += *planeCompSize*) {
+                planes[i / *planeCompSize*] = Plane(
+                    vec3(planeObjs[i], planeObjs[i + 1], planeObjs[i + 2]), // Position
+                    normalize(vec3(planeObjs[i + 3], planeObjs[i + 4], planeObjs[i + 5])), // Normal
+                    vec2(planeObjs[i + 6], planeObjs[i + 7]), // Dimensions
+                    vec3(planeObjs[i + 8], planeObjs[i + 9], planeObjs[i + 10]), // Color
+                    planeObjs[i + 11], // Type
+                    planeObjs[i + 12], // Fuzz
+                    planeObjs[i + 13] // Albedo
+                );
+            }
+            for (int i = 0; i < rectCompNum; i += *rectCompSize*) {
+                rects[i / *rectCompSize*] = Rect(
+                    vec3(rectObjs[i], rectObjs[i + 1], rectObjs[i + 2]), // Position
+                    vec2(rectObjs[i + 3], rectObjs[i + 4])
+                );
+            }
+            for (int i = 0; i < lightCompNum; i += *lightCompSize*) {
+                lights[i / *lightCompSize*] = Light(
+                    vec3(lightObjs[i], lightObjs[i + 1], lightObjs[i + 2]), // Position
+                    lightObjs[i + 3], // Radius
+                    vec3(lightObjs[i + 4], lightObjs[i + 5], lightObjs[i + 6]), // Color
+                    lightObjs[i + 7] // Dim
+                );
+            }
+            
+
+            vec4 col;
+            vec3 camPos = vec3(0, 0.5, -1);//vec3(-1.4, 1, 3.9);//vec3(0, 0.5, -1);//vec3(-1.4, 0.5, 3.9);//vec3(-3, 3, -1);
+            for (int i = 0; i < spa; i ++) {
+                for (int j = 0; j < spa; j ++) {
+                    vec2 offset = vec2(float(j), float(i)) / float(spa) / 800.0;
+
+                    vec2 rayDir = vPos * 0.5 + offset + rand(vPos + randOffset) / 800.0;
+                    vec3 totalRayDir = normalize(vec3(rayDir, 1));
+
+
+                    totalRayDir *= rotz * rotx * roty;
+
+
+                    Ray ray = Ray(camPos, totalRayDir); // vec3(-3, 3, -1)
+
+                    col += rayColor(ray, offset);
+                }
+            }
+
+            vec4 fcol = col / samples;
+            gl_FragColor = fcol;
+        }
+    </script>
+        
+    <script>
+        const error = document.getElementById('error');
+        const log = (...args) => {
+            error.innerHTML += '<br>';
+            for (const arg of args) error.innerHTML += arg + ' ';
+        }
+
+        try {
+        const canvas = document.getElementById('canvas'),
+            ctx = canvas.getContext('2d');
+        const glCanvas = document.createElement('canvas'),
+              gl = glCanvas.getContext('webgl');
+        const offscreen = document.createElement('canvas'),
+              oCtx = offscreen.getContext('2d');
+        
+        const dim  = Math.min(window.innerWidth, window.innerHeight);
+        canvas.width = canvas.height = glCanvas.width = glCanvas.height = offscreen.width = offscreen.height = dim;
+
+        function createShader(gl, type, source) {
+            const shader = gl.createShader(type);
+            gl.shaderSource(shader, source);
+            gl.compileShader(shader);
+
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                error.textContent += (gl.getShaderInfoLog(shader));
+            }
+
+            return shader;
+        }
+        function createProgram(gl, vs, fs) {
+            const program = gl.createProgram();
+            gl.attachShader(program, vs);
+            gl.attachShader(program, fs);
+            gl.linkProgram(program);
+
+            return program;
+        }
+        
+        const positions = new Float32Array([
+            -1, -1,
+            3, -1,
+            -1, 3,
+        ]);
+
+        const createSphere = obj => spheres.push(...Object.values(obj));
+        const createPlane = obj => planes.push(...Object.values(obj));
+        const createLight = obj => lights.push(...Object.values(obj));
+        const createRect = obj => rects.push(...Object.values(obj));
+        const createDoublePlane = obj => {
+            planes.push(...Object.values(obj));
+            planes.push(
+                obj.x - obj.nx * 0.001,
+                obj.y - obj.ny * 0.001,
+                obj.z - obj.nz * 0.001,
+                -obj.nx,
+                -obj.ny,
+                -obj.nz,
+                obj.w,
+                obj.h,
+                obj.r,
+                obj.g,
+                obj.b,
+                0,//obj.type,
+                1,//obj.fuzz,
+                obj.albedo,
+            );
+        };
+
+        const sphereComp = 10; // Number of components in a sphere
+        let spheres = []; // x, y, z, rad, r, g, b, type (reflective tinted (0), reflective clear (1), glass (2)), fuzz, albedo
+        const planeComp = 14;
+        let planes = []; // x, y, z, normx, normy, normz, width, height, r, g, b, type (reflective tinted (3), reflective clear (4)), fuzz, albedo
+        const rectComp = 5;
+        let rects = []; // x, y, z, dim1, dim2
+        const lightComp = 8;
+        let lights = []; // x, y, z, rad, r, g, b, dim
+        
+        createLight({
+            x: 0,
+            y: 1.4,
+            z: 2.7,
+            rad: 0.2,
+            r: 5.1,
+            g: 5.0,
+            b: 5.0,
+            dim: 0.7, // Higher = diminishes quicker
+        });
+        /*createSphere({
+            x: 0,
+            y: 0,
+            z: 2.7,
+            rad: 0.5,
+            r: 254 / 255,
+            g: 248 / 255,
+            b: 247 / 255,
+            type: 0,
+            fuzz: 1,
+            albedo: 0
+        });
+        createSphere({
+            x: -0.9,
+            y: -0.7,
+            z: 2.5,
+            rad: 0.3,
+            r: 117 / 255, //117, 109, 84
+            g: 109 / 255,
+            b: 84 / 255,
+            type: 0,
+            fuzz: 0,
+            albedo: 0
+        });
+        createSphere({ // Glass
+            x: 0.9,
+            y: -0.6,
+            z: 3.25,
+            rad: 0.4,
+            r: 1,
+            g: 1,
+            b: 1,
+            type: 2,
+            fuzz: 1,
+            albedo: 0
+        });
+        createDoublePlane({ // Mirror
+            x: -1.3,
+            y: 1,
+            z: 3,
+            nx: 0.7,
+            ny: 0,
+            nz: -1,
+            w: 2,
+            h: 0.8,
+            r: 0.7,
+            g: 0.7,
+            b: 0.7,
+            type: 1,
+            fuzz: 0,
+            albedo: 1
+        });
+
+
+        createPlane({ // Floor
+            x: -1.5,
+            y: -1,
+            z: 0,
+            nx: 0,
+            ny: 1,
+            nz: 0,
+            w: 3,
+            h: 4,
+            r: 242 / 255,
+            g: 233 / 255,
+            b: 228 / 255,
+            type: 0,
+            fuzz: 1,
+            albedo: 1
+        });
+        createPlane({ // Ceiling
+            x: -1.5,
+            y: 2,
+            z: 0,
+            nx: -0.001,
+            ny: -1,
+            nz: -0,
+            w: 3,
+            h: 4,
+            r: 242 / 255,
+            g: 233 / 255,
+            b: 228 / 255,
+            type: 0,
+            fuzz: 1,
+            albedo: 1
+        });
+        createPlane({ // Back wall
+            x: -1.5,
+            y: 2,
+            z: 4,
+            nx: -0.001,
+            ny: 0,
+            nz: -1,
+            w: 3,
+            h: 4,
+            r: 242 / 255,
+            g: 233 / 255,
+            b: 228 / 255,
+            type: 0,
+            fuzz: 1,
+            albedo: 1
+        });
+        createPlane({ // Other back wall
+            x: -1.5,
+            y: 2,
+            z: 0.01,
+            nx: 0.001,
+            ny: 0,
+            nz: 1,
+            w: 3,
+            h: 4,
+            r: 242 / 255,
+            g: 233 / 255,
+            b: 228 / 255,
+            type: 0,
+            fuzz: 1,
+            albedo: 1
+        });
+        createPlane({ // Left
+            x: -1.5,
+            y: 2,
+            z: 0,
+            nx: 1,
+            ny: 0.01,
+            nz: 0,
+            w: 3,
+            h: 4,
+            r: -0.1,//46 / 255 / 8,
+            g: -0.1,//40 / 255 / 8,
+            b: -0.1,//54 / 255 / 8,
+            type: 0,
+            fuzz: 1,
+            albedo: 1
+        });
+        createPlane({ // Right
+            x: 1.5,
+            y: 2,
+            z: -0,
+            nx: -1,
+            ny: 0.01,
+            nz: 0,
+            w: 3,
+            h: 4,
+            r: 106 * 0.8 / 255 * 1.2,
+            g: 46 * 0.8 / 255 * 1.2,
+            b: 53 * 0.8 / 255 * 1.2,
+            type: 0,
+            fuzz: 1,
+            albedo: 1
+        });*/
+        createSphere({
+            x: 0,
+            y: 0,
+            z: 2.7,
+            rad: 0.5,
+            r: 0.7,
+            g: 0.7,
+            b: 0.7,
+            type: 0,
+            fuzz: 1,
+            albedo: 0
+        });
+        createSphere({
+            x: -0.9,
+            y: -0.7,
+            z: 2.5,
+            rad: 0.3,
+            r: 0.5,
+            g: 0.5,
+            b: 0.5,
+            type: 0,
+            fuzz: 0,
+            albedo: 0
+        });
+        createSphere({ // Glass
+            x: 0.9,
+            y: -0.6,
+            z: 3.25,
+            rad: 0.4,
+            r: 1,
+            g: 1,
+            b: 1,
+            type: 2,
+            fuzz: 1,
+            albedo: 0
+        });
+        createDoublePlane({ // Mirror
+            x: -1.3,
+            y: 1,
+            z: 3,
+            nx: 0.7,
+            ny: 0,
+            nz: -1,
+            w: 2,
+            h: 0.8,
+            r: 0.7,
+            g: 0.7,
+            b: 0.7,
+            type: 1,
+            fuzz: 0,
+            albedo: 1
+        });
+
+
+        createPlane({ // Floor
+            x: -1.5,
+            y: -1,
+            z: 0,
+            nx: 0,
+            ny: 1,
+            nz: 0,
+            w: 3,
+            h: 4,
+            r: 0.7,
+            g: 0.7,
+            b: 0.7,
+            type: 0,
+            fuzz: 1,
+            albedo: 1
+        });
+        createPlane({ // Ceiling
+            x: -1.5,
+            y: 2,
+            z: 0,
+            nx: -0.001,
+            ny: -1,
+            nz: -0,
+            w: 3,
+            h: 4,
+            r: 0.7,
+            g: 0.7,
+            b: 0.7,
+            type: 0,
+            fuzz: 1,
+            albedo: 1
+        });
+        createPlane({ // Back wall
+            x: -1.5,
+            y: 2,
+            z: 4,
+            nx: -0.001,
+            ny: 0,
+            nz: -1,
+            w: 3,
+            h: 4,
+            r: 0.7,
+            g: 0.7,
+            b: 0.7,
+            type: 0,
+            fuzz: 1,
+            albedo: 1
+        });
+        createPlane({ // Other back wall
+            x: -1.5,
+            y: 2,
+            z: 0.01,
+            nx: 0.001,
+            ny: 0,
+            nz: 1,
+            w: 3,
+            h: 4,
+            r: 0.7,
+            g: 0.7,
+            b: 0.7,
+            type: 0,
+            fuzz: 1,
+            albedo: 1
+        });
+        createPlane({ // Left
+            x: -1.5,
+            y: 2,
+            z: 0,
+            nx: 1,
+            ny: 0.01,
+            nz: 0,
+            w: 3,
+            h: 4,
+            r: 0.0,
+            g: 0.7,
+            b: 0.0,
+            type: 0,
+            fuzz: 1,
+            albedo: 1
+        });
+        createPlane({ // Right
+            x: 1.5,
+            y: 2,
+            z: -0,
+            nx: -1,
+            ny: 0.01,
+            nz: 0,
+            w: 3,
+            h: 4,
+            r: 0.7,
+            g: 0.0,
+            b: 0.0,
+            type: 0,
+            fuzz: 1,
+            albedo: 1
+        });
+
+
+        for (let i = spheres.length; i < sphereComp; i ++) spheres.push(0);
+        for (let i = planes.length; i < planeComp; i ++) planes.push(0);
+        for (let i = rects.length; i < rectComp; i ++) rects.push(0);
+        for (let i = lights.length; i < lightComp; i ++) lights.push(0);
+
+        spheres = new Float32Array(spheres);
+        planes = new Float32Array(planes);
+        rects = new Float32Array(rects);
+        lights = new Float32Array(lights);
+
+        let frame = 1;
+        function main() {
+            const vertexSource = document.getElementById('vertex-shader').textContent,
+                  fragmentSource = document.getElementById('fragment-shader').textContent
+                    .replaceAll('*sphereNum*', spheres.length / sphereComp)
+                    .replaceAll('*sphereCompSize*', sphereComp)
+                    .replaceAll('*planeNum*', planes.length / planeComp)
+                    .replaceAll('*planeCompSize*', planeComp)
+                    .replaceAll('*lightNum*', lights.length / lightComp)
+                    .replaceAll('*lightCompSize*', lightComp)
+                    .replaceAll('*rectNum*', rects.length / rectComp)
+                    .replaceAll('*rectCompSize*', rectComp);
+            
+            // log(fragmentSource)
+            
+            const vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexSource),
+                  fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentSource),
+                  program = createProgram(gl, vertexShader, fragmentShader);
+            
+            gl.useProgram(program);
+
+            const aPos = gl.getAttribLocation(program, 'aPos'),
+                sphereObjsLocation = gl.getUniformLocation(program, 'sphereObjs'),
+                planeObjsLocation = gl.getUniformLocation(program, 'planeObjs'),
+                rectObjsLocation = gl.getUniformLocation(program, 'rectObjs'),
+                lightObjsLocation = gl.getUniformLocation(program, 'lightObjs'),
+                randOffset = gl.getUniformLocation(program, 'randOffset');
+            
+            // log(planes)
+            
+            const posBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+            
+            gl.uniform1fv(sphereObjsLocation, spheres);
+            gl.uniform1fv(planeObjsLocation, planes);
+            gl.uniform1fv(rectObjsLocation, rects);
+            gl.uniform1fv(lightObjsLocation, lights);
+
+            gl.vertexAttribPointer(
+                aPos,
+                2,
+                gl.FLOAT,
+                false,
+                0,
+                0,
+            );
+            
+            gl.enableVertexAttribArray(aPos);
+            
+            const mainData = new Float64Array(dim * dim * 4);
+            function render() {
+                gl.uniform1f(randOffset, Math.random());
+
+                gl.viewport(0, 0, dim, dim);
+                gl.clearColor(0, 0, 0, 1);
+                gl.clear(gl.COLOR_BUFFER_BIT);
+
+                gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+                oCtx.drawImage(glCanvas, 0, 0);
+
+                const imgData = oCtx.getImageData(0, 0, dim, dim),
+                    dataLen = dim * dim * 4,
+                    newData = new ImageData(dim, dim);
+                    // mainData = ctx.getImageData(0, 0, dim, dim);
+                // const main = (frame - 1) / frame,
+                //     secondary = 1 / frame;
+                
+                for (let i = 0; i < dataLen; i += 4) {
+                    mainData[i    ] += imgData.data[i    ];
+                    mainData[i + 1] += imgData.data[i + 1];
+                    mainData[i + 2] += imgData.data[i + 2];
+                    mainData[i + 3] = 255;
+
+                    newData.data[i    ] = mainData[i    ] / frame;
+                    newData.data[i + 1] = mainData[i + 1] / frame;
+                    newData.data[i + 2] = mainData[i + 2] / frame;
+                    newData.data[i + 3] = 255;
+                    // mainData.data[i    ] = mainData.data[i    ] * main + imgData.data[i    ] * secondary;
+                    // mainData.data[i + 1] = mainData.data[i + 1] * main + imgData.data[i + 1] * secondary;
+                    // mainData.data[i + 2] = mainData.data[i + 2] * main + imgData.data[i + 2] * secondary;
+                    // mainData.data[i + 3] = 255;
+                }
+                
+                
+                ctx.putImageData(newData, 0, 0);
+
+                frame ++;
+
+                //if (frame === 30) window.clearInterval(id);
+            }
+            render();
+            let id = window.setInterval(render, 1);
+
+            window.addEventListener('blur', e => window.clearInterval(id));
+            window.addEventListener('focus', e => {
+                id = window.setInterval(render, 1);
+            });
+        }
+        main();
+        
+        } catch(e) {
+           error.textContent = e;
+        }
+        
+    </script>
+    </body>
+</html>
+<!-- 
+        
+        
+        // Blue
+        // createLight({
+        //     x: 2, // 4
+        //     y: 5,
+        //     z: 3, // 7
+        //     rad: 0,//3,
+        //     r: 10,//0,
+        //     g: 10,//0.3,
+        //     b: 10,//0.5,
+        //     // type: 0,
+        //     // fuzz: 1,
+        //     // albedo: 1,
+        // });
+        
+        // createSphere({
+        //     x: -1.5,
+        //     y: -0.4,
+        //     z: 4,
+        //     rad: 0.6,
+        //     r: 0,
+        //     g: 0.3,
+        //     b: 0.5,
+        //     type: 0,
+        //     fuzz: 1,
+        //     albedo: 1,
+        // });
+        
+        /*createSphere({
+            x: -1.5,
+            y: 0.2,
+            z: 4,
+            rad: 0.6,
+            r: 1,
+            g: 0.7,
+            b: 0,
+            // r: 0,
+            // g: 0.3,
+            // b: 0.5,
+            type: 0,
+            fuzz: 1,
+            albedo: 1,
+        });
+        // Red
+        createSphere({
+            x: 0,
+            y: 2,
+            z: 7,
+            rad: 0.4,
+            r: 1,
+            g: 0.5,
+            b: 0.5,
+            type: 0,
+            fuzz: 1,
+            albedo: 1,
+        });
+        // Reflective
+        createSphere({
+            x: 1.5,
+            y: 0.5,
+            z: 4.5,
+            rad: 1,
+            r: 1,
+            g: 1,
+            b: 1,
+            type: 1,
+            fuzz: 0,
+            albedo: 1,
+        });
+        // createLight({
+        //     x: 1.5,
+        //     y: 0.5,
+        //     z: 4.5,
+        //     rad: 1,
+        //     r: 1,//0,
+        //     g: 1,//0.3,
+        //     b: 1,//0.5,
+        //     // type: 0,
+        //     // fuzz: 1,
+        //     // albedo: 1,
+        // });
+        // Glass
+        createSphere({
+            x: 1.5,
+            y: 1.2, // 0.6
+            z: 2,
+            rad: 0.5,
+            r: 0,
+            g: 0,
+            b: 0,
+            type: 2,
+            fuzz: 0,
+            albedo: 1,
+        });*/
+
+        // Floor
+        // createPlane({
+        //     x: 0,
+        //     y: -1,
+        //     z: 0,
+        //     normx: 0,
+        //     normy: 1,
+        //     normz: 0,
+        //     w: 10,
+        //     h: 10,
+        //     r: 1,
+        //     g: 1,
+        //     b: 1,
+        //     type: 0,
+        //     fuzz: 1,
+        //     albedo: 1,
+        // });
+
+        // createRect({
+        //     x: -3,
+        //     y: -1,
+        //     z: 1,
+        //     dim1: 7.5,
+        //     dim2: 7.5,
+        // });
+    
+    
+    
+    vec4 rayColor(Ray ray, vec2 offset) {
+            vec3 totalCol = vec3(0, 0, 0);
+            float bounces = 0.0;
+            float depthMult = 2.0;
+            int hitNum = maxDepth;
+
+            vec3 cols[maxDepth],
+                emmittions[maxDepth];
+
+            bool lightHit = false; // If it hit a light
+            vec3 luminosity = vec3(0,0,0); // How bright light is
+            //vec3; // What was hit last
+            for (int depth = 0; depth < maxDepth; depth ++) {
+                int type; // Sphere (0), plane (1), light (2)
+                float min = 1000.0,
+                    hitAlbedo;
+                vec3 col = vec3(0, 0, 0),
+                     newPos = ray.dir,
+                     hitNormal,
+                     emmitted = vec3(0, 0, 0);
+                Sphere hitSphere;
+                Plane hitPlane;
+                Rect hitRect;
+                Light hitLight;
+
+                for (int i = 0; i < *sphereNum*; i ++) {
+                    Sphere s = spheres[i];
+                    float dist = sphereIntersect(s, ray);
+    
+                    if (dist != -1.0 && dist < min) {
+                        min = dist;
+
+                        vec3 newRayPos = getRayAt(ray, dist);
+                        
+                        hitSphere = s;
+                        hitNormal = normalize(newRayPos - s.pos);
+                        hitAlbedo = s.albedo;
+                        emmitted = vec3(0, 0, 0);
+
+
+                        newPos = newRayPos;
+                        type = 0;
+                    }
+                }
+                for (int i = 0; i < *planeNum*; i ++) {
+                    Plane p = planes[i];
+                    vec4 intersection = planeIntersect(p, ray);
+                    float dist = length(intersection.xyz - ray.pos);
+
+                    if (intersection.w != -1.0 && dist < min) {
+                        min = dist;
+
+                        hitPlane = p;
+                        hitNormal = p.normal;
+                        hitAlbedo = p.albedo;
+                        emmitted = vec3(1, 1, 1);
+
+                        newPos = intersection.xyz;
+                        type = 1;
+                    }
+                }
+                bool flag = false;
+                for (int i = 0; i < *lightNum*; i ++) {
+                    Light l = lights[i];
+                    float dist = lightIntersect(l, ray);
+
+                    if (dist != -1.0 && dist < min) {
+                        min = dist;
+                        flag = true;
+                        vec3 newRayPos = getRayAt(ray, dist);
+                        
+                        hitLight = l;
+                        hitNormal = normalize(newRayPos - l.pos);
+                        hitAlbedo = 1.0;
+                        emmitted = vec3(10,10,10);//l.emmitted;
+
+                        newPos = newRayPos;
+                        type = 2;
+                    }
+                }
+
+
+                if (type == 0) {
+                    if (hitSphere.type == 2.0) {
+                        ray.dir = dot(hitNormal, ray.dir) > 0.0 ? refract(ray.dir, -hitNormal, 1.5) : refract(ray.dir, hitNormal, 1.0/1.5); // Glass has a refraction index of 1.3 - 1.7, I just used the average
+                    } else {
+                        ray.dir = normalize(mix(reflect(ray.dir, hitNormal), normalize(hitNormal + randus(vPos + offset + randOffset)), hitSphere.fuzz)); // randOffset
+                    }
+
+
+                    col = hitSphere.col;// * lightScale
+                } else if (type == 1) {
+                    ray.dir = normalize(mix(reflect(ray.dir, hitNormal), normalize(hitNormal + randus(vPos + offset + randOffset)), hitPlane.fuzz));
+                    
+                    float scale = 2.0; // 2.0
+                    float hscale = scale * 0.5;
+                    cols[depth] = hitPlane.col;// * ((mod(newPos.x, scale) < hscale ^^ mod(newPos.z, scale) < hscale) ? 0.5 : 1.0);
+                } else if (type == 2) {
+                    bounces += 0.6;
+                    //cols[depth] = hitLight.emmitted;// * pow(0.5, bounces);
+
+                    hitNum = depth;
+                    lightHit = true;
+                    luminosity = emmitted;
+                    break;
+                }
+
+                if (min == 1000.0) { // If the ray didn't hit anything, stop now
+                    bounces += 0.6; // Magic number that I don't understand
+
+                    if (skyIsLight) {
+                        float t = (ray.dir.y + 1.0) * 0.5;
+                        totalCol += (((1.0 - t) + t * vec3(0.5, 0.7, 1.0))) * pow(0.5, float(bounces)); // vec3(0.5, 0.7, 1.0)) ((1.0 - t) + t * vec3(0.18, 0.05, 0.54))
+                        lightHit = true;
+                        luminosity = vec3(2,2,2);
+                    }
+                    break;
+                }
+
+                // Update data
+                //if (!(hitSphere.type == 1.0 || hitSphere.type == 2.0)) {
+                    //depthMult *= hitAlbedo * 0.5;
+                    //totalCol += col * depthMult;// * pow(0.5, float(bounces)); // * hitAlbedo;//
+                    bounces += bounceStrength;
+
+                    //cols[depth] = col;//!flag ? col : vec3(0, 1, 0);// * depthMult;
+                    //emmittions[depth] = emmitted;
+                //}
+
+
+                
+                ray.pos = newPos;
+            }
+
+            if (lightHit) {
+                for (int i = maxDepth; i > 0; i --) {
+                //for (int i = 0; i < maxDepth; i ++) {
+                    //if (i >= hitNum) {
+                    //    totalCol = cols[i];
+                    //    continue;
+                    //}
+                    totalCol += (cols[i]);// * luminosity;// emmittions[i] + * (ambientLight + pow(0.9, float(i)));
+                }
+            }
+
+            totalCol /= bounces;
+            return vec4(totalCol, 1);
+        }-->
