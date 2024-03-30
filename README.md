@@ -27,4 +27,5 @@ Simulates chemicals interacting using the Gray-Scott model of reaction-diffusion
 
 ## Cloth Simulation
 Simulates a piece of cloth. The motion of the particles of cloth are simulated using Verlet integration. Click <a href='https://henrytermondt.github.io/app-portfolio/cloth-simulation.html' target='_blank'>here</a> to view. Move the mouse to interact with the cloth.
+
 ![Cloth](https://henrytermondt.github.io/app-portfolio/imgs/cloth.png)
